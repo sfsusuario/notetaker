@@ -30,6 +30,8 @@ pub struct LiveSession {
     pub sources: Vec<(Source, SourceHandles)>,
     pub audio_dir: PathBuf,
     pub started_at: u64,
+    /// Nombre real del dispositivo abierto por fuente (para los avisos).
+    pub device_labels: Vec<(Source, String)>,
 }
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]

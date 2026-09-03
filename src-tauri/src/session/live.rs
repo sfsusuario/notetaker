@@ -80,6 +80,7 @@ pub async fn session_start_live(
 
     let mut handles = Vec::new();
     let mut started = Vec::new();
+    let mut labels: Vec<(Source, String)> = Vec::new();
     for source in cfg.sources.iter().copied() {
         let device_id = match source {
             Source::Mic => cfg.mic_device_id.clone(),
@@ -102,6 +103,7 @@ pub async fn session_start_live(
             Arc::new(AtomicBool::new(false)),
         ) {
             Ok((h, s)) => {
+                labels.push((source, s.device_label.clone()));
                 handles.push((source, h));
                 started.push(s);
             }
@@ -122,6 +124,7 @@ pub async fn session_start_live(
         sources: handles,
         audio_dir: audio_dir.clone(),
         started_at,
+        device_labels: labels,
     });
     Ok(StartResult {
         session_id: cfg.session_id,
@@ -144,6 +147,7 @@ pub async fn stop_live(app: &AppHandle, state: &Arc<AppState>, reason: &str) -> 
     }
     let mut wavs = Vec::new();
     let mut sources: Vec<(Source, std::path::PathBuf)> = Vec::new();
+    let device_labels = session.device_labels.clone();
     for (src, mut h) in session.sources {
         if let Some(p) = h.pipeline.take() {
             if tokio::time::timeout(Duration::from_secs(5), p).await.is_err() {
@@ -159,23 +163,43 @@ pub async fn stop_live(app: &AppHandle, state: &Arc<AppState>, reason: &str) -> 
         wavs.push(h.wav_path.clone());
     }
 
-    // Aviso si alguna fuente no capturó nada: pasa, por ejemplo, cuando la
-    // salida activa es un auricular Bluetooth en modo manos libres, donde el
-    // loopback de Windows no entrega audio.
+    // Una fuente puede acabar sin muestras por motivos normales: WASAPI no
+    // entrega nada cuando el dispositivo de salida está en reposo (no sonó
+    // nada) y, con auriculares Bluetooth, usar su micrófono los pasa a modo
+    // manos libres y desactiva la captura del audio del equipo. Se avisa como
+    // información (no como error) y solo si la sesión duró lo suficiente para
+    // que la ausencia de audio sea significativa.
+    let longest_ms = sources
+        .iter()
+        .filter_map(|(_, p)| wav_duration_ms(p))
+        .max()
+        .unwrap_or(0);
     for (src, path) in &sources {
-        if wav_duration_ms(path).unwrap_or(0) < 300 {
-            let what = match src {
-                Source::Mic => "del micrófono",
-                Source::System => "del sistema",
-                Source::File => "del archivo",
-            };
-            crate::stt::emit_error(
-                app,
-                format!(
-                    "No se capturó audio {what} en esta sesión. Revisa el dispositivo elegido (los auriculares Bluetooth en modo manos libres no permiten grabar el audio del sistema)."
-                ),
-            );
+        let dur = wav_duration_ms(path).unwrap_or(0);
+        if dur >= 300 {
+            continue;
         }
+        // Se descarta el WAV vacío: si no, aparece como pista de la sesión y
+        // luego falla al intentar transcribirlo.
+        let _ = std::fs::remove_file(path);
+        if longest_ms < 5_000 {
+            continue;
+        }
+        let device = device_labels
+            .iter()
+            .find(|(s, _)| s == src)
+            .map(|(_, d)| d.as_str())
+            .unwrap_or("el dispositivo elegido");
+        let message = match src {
+            Source::System => format!(
+                "No se guardó audio del sistema: durante la sesión no sonó nada en «{device}». Con auriculares Bluetooth, además, usar su micrófono los pone en modo manos libres y desactiva la captura del audio del equipo."
+            ),
+            Source::Mic => format!(
+                "No se guardó audio del micrófono «{device}»: no llegó ninguna muestra. Revisa que no esté silenciado y que la app tenga permiso para usarlo."
+            ),
+            Source::File => continue,
+        };
+        let _ = app.emit("audio://warning", serde_json::json!({ "message": message }));
     }
 
     // 2) Mezcla para reproducción

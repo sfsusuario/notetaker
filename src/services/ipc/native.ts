@@ -106,6 +106,8 @@ export const onSttStatus = on<StatusEvent>("stt://status");
 export const onSttProgress = on<ProgressEvent>("stt://progress");
 export const onAudioMetrics = on<AudioMetrics>("audio://metrics");
 export const onAudioError = on<{ message: string }>("audio://error");
+/** Aviso informativo (p. ej. una fuente que no capturó audio): no es un fallo. */
+export const onAudioWarning = on<{ message: string }>("audio://warning");
 export const onSessionStopped = on<StopResult>("session://stopped");
 export const onMeetingDetected = on<MeetingInfo>("meeting://detected");
 export const onMeetingEnded = on<MeetingInfo>("meeting://ended");

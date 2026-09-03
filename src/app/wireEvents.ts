@@ -6,6 +6,7 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 import {
   onAudioError,
   onAudioMetrics,
+  onAudioWarning,
   onMeetingDetected,
   onMeetingDetectionChanged,
   onMeetingStartRequest,
@@ -81,6 +82,11 @@ export async function wireNativeEvents(): Promise<UnlistenFn[]> {
       useSessionStore.getState().setError(e.message);
       useUiStore.getState().toast(e.message, "error");
     }),
+  );
+
+  u.push(
+    // Aviso informativo: no marca la sesión como errónea ni pinta el banner rojo.
+    await onAudioWarning((e) => useUiStore.getState().toast(e.message)),
   );
 
   u.push(

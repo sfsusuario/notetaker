@@ -80,6 +80,8 @@ pub fn run() {
         .manage(Arc::new(state::AppState::default()))
         .setup(|app| {
             tray::setup_tray(app.handle())?;
+            // Servidores whisper que sobrevivieran a un cierre abrupto anterior.
+            stt::whisper::server::kill_stale(app.handle());
             let state = app.state::<Arc<state::AppState>>().inner().clone();
             meeting::spawn_poller(app.handle().clone(), state);
             Ok(())

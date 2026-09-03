@@ -59,6 +59,80 @@ fn emit(app: &AppHandle, status: &'static str, model: &str, port: Option<u16>, m
     );
 }
 
+/// Asocia el proceso hijo a un "job object" con KILL_ON_JOB_CLOSE: si la app
+/// muere de forma abrupta (cierre forzado, reinicio del servidor de
+/// desarrollo), Windows mata también a whisper-server en vez de dejarlo
+/// corriendo con el modelo cargado en memoria.
+#[cfg(windows)]
+fn attach_kill_on_close(child: &Child) {
+    use std::os::windows::io::AsRawHandle;
+    use std::sync::OnceLock;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+
+    // El HANDLE se guarda como usize porque HANDLE no es Sync.
+    static JOB: OnceLock<usize> = OnceLock::new();
+    let job = *JOB.get_or_init(|| unsafe {
+        match CreateJobObjectW(None, windows::core::PCWSTR::null()) {
+            Ok(h) => {
+                let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                let _ = SetInformationJobObject(
+                    h,
+                    JobObjectExtendedLimitInformation,
+                    &info as *const _ as *const std::ffi::c_void,
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                );
+                h.0 as usize
+            }
+            Err(e) => {
+                eprintln!("[whisper] no se pudo crear el job object: {e}");
+                0
+            }
+        }
+    });
+    if job == 0 {
+        return;
+    }
+    unsafe {
+        if let Err(e) = AssignProcessToJobObject(
+            HANDLE(job as *mut std::ffi::c_void),
+            HANDLE(child.as_raw_handle() as *mut std::ffi::c_void),
+        ) {
+            eprintln!("[whisper] no se pudo asociar el proceso al job: {e}");
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn attach_kill_on_close(_child: &Child) {}
+
+/// Mata servidores whisper de arranques anteriores que quedaran huérfanos.
+/// Solo toca binarios dentro de la carpeta de datos de la app.
+pub fn kill_stale(app: &AppHandle) {
+    let Ok(bin) = install::bin_dir(app) else { return };
+    let mut sys = sysinfo::System::new();
+    sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+    let me = std::process::id();
+    for (pid, proc_) in sys.processes() {
+        if pid.as_u32() == me {
+            continue;
+        }
+        let name = proc_.name().to_string_lossy().to_lowercase();
+        if name != "whisper-server.exe" && name != "whisper-server" {
+            continue;
+        }
+        if proc_.exe().map(|p| p.starts_with(&bin)).unwrap_or(false) {
+            eprintln!("[whisper] matando servidor huérfano pid={}", pid.as_u32());
+            proc_.kill();
+        }
+    }
+}
+
 pub fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
         .and_then(|l| l.local_addr())
@@ -134,6 +208,7 @@ pub async fn ensure_running(
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("No se pudo lanzar whisper-server: {e}"))?;
+    attach_kill_on_close(&child);
 
     // Drenar stderr a la consola (si no, el pipe se llena y el proceso se bloquea)
     if let Some(stderr) = child.stderr.take() {
