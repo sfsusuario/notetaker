@@ -82,7 +82,7 @@ pub fn decode_to_pcm16k(path: &Path, mut on_progress: impl FnMut(f32)) -> Result
     }
     on_progress(100.0);
     if out.is_empty() {
-        return Err("El archivo no contiene audio decodificable".into());
+        return Err("La pista está vacía: no se grabó audio en esta fuente.".into());
     }
     Ok(out)
 }

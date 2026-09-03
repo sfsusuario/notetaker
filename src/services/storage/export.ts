@@ -94,3 +94,29 @@ export async function exportSession(
   await saveTextFile(path, content);
   return path;
 }
+
+/**
+ * Copia la transcripción en Markdown al portapapeles. Más ágil que exportar a
+ * un archivo cuando solo quieres pegarla en otra herramienta.
+ */
+export async function copyTranscript(input: ExportInput): Promise<boolean> {
+  const text = buildMarkdown(input);
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // Reserva por si el portapapeles asíncrono no está disponible en el WebView.
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.cssText = "position:fixed;opacity:0";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      ta.remove();
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+}

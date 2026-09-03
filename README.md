@@ -3,7 +3,10 @@
 Aplicación de escritorio (Windows) para **transcribir reuniones en tiempo real o desde una grabación**, guardarlas en un historial y **conversar con una IA sobre lo hablado**.
 
 - **Dos motores de transcripción**: Deepgram (nube, nova-3, detecta hablantes) y **whisper.cpp local** (sin conexión, sin API key).
-- **Dos modos**: en vivo (micrófono, audio del sistema o ambos) o desde un archivo (wav, mp3, m4a, ogg, flac).
+- **Tres modos**:
+  - **En vivo**: graba y transcribe a la vez (micrófono, audio del sistema o ambos).
+  - **Solo grabar**: guarda el audio sin transcribir, sin API key ni modelo. La sesión queda como *Sin transcribir* y la transcribes cuando quieras con el motor que prefieras.
+  - **Desde grabación**: transcribe un archivo existente (wav, mp3, m4a, ogg, flac).
 - **Hablantes**: con mic + sistema por separado siempre distingues *Yo* de *Otros*; Deepgram además separa *Hablante 1, 2…*. El selector de motor muestra si detecta hablantes.
 - **Historial** con título automático (IA) editable, búsqueda por contenido, reproductor sincronizado con las burbujas, renombrado de hablantes, exportación (md/txt/json) y retranscripción con otro motor.
 - **Chat con IA** por sesión (Gemini por defecto; también OpenAI, Anthropic, DeepSeek, Kimi u Ollama local). La lista de modelos se obtiene de la API oficial de cada proveedor.
@@ -29,7 +32,9 @@ O directamente: `npm install`, `npm run tauri dev`, `npm run tauri build`.
 
 1. **Ajustes → Proveedor de IA**: elige proveedor, pulsa *Lista oficial* para cargar sus modelos, guarda la API key y *Probar conexión*.
 2. **Ajustes → Transcripción**: guarda la API key de Deepgram **o** instala el motor local en **Whisper local** (servidor + modelo `base`).
-3. **Nueva sesión**: elige *En vivo* o *Desde grabación*, motor, fuentes de audio e idioma, e inicia.
+3. **Nueva sesión**: elige el modo (*En vivo*, *Solo grabar* o *Desde grabación*), revisa el resumen y arranca. Las secciones de motor, fuentes e idioma se despliegan solo si quieres cambiarlas.
+
+*Solo grabar* no necesita nada configurado: útil si la reunión empieza ya y prefieres resolver la transcripción después.
 
 Las API keys se guardan en el Administrador de credenciales de Windows (servicio `notetaker`), nunca en texto plano.
 

@@ -7,6 +7,7 @@ import {
 } from "../../../components/common/icons";
 import { Badge, Dropdown, cn } from "../../../components/common/ui";
 import { useEnginesStore } from "../../../stores/useEnginesStore";
+import { useSettingsStore } from "../../../stores/useSettingsStore";
 import { useUiStore } from "../../../stores/useUiStore";
 import type { EngineId, EngineInfo } from "../../../types";
 
@@ -56,18 +57,34 @@ export function EnginePicker({ engine, model, onChange, compact }: Props) {
   const current = engines.find((e) => e.id === engine);
   const installedModels = (current?.models ?? []).filter((m) => m.installed);
 
+  /** El modelo elegido aquí queda como predeterminado para próximas sesiones. */
+  const pickWhisperModel = (id: string) => {
+    onChange("whisper", id);
+    useSettingsStore.getState().set({ whisperModel: id, defaultEngine: "whisper" });
+  };
+
   return (
     <div className="space-y-2">
-      <div className={cn("grid gap-2", compact ? "grid-cols-1" : "grid-cols-2")}>
+      <div className="grid grid-cols-2 gap-2">
         {engines.map((info) => {
           const selected = info.id === engine;
           return (
             <button
               key={info.id}
               type="button"
-              onClick={() => onChange(info.id, defaultModelFor(info, info.id === engine ? model : null))}
+              onClick={() => {
+                const settings = useSettingsStore.getState();
+                const m = defaultModelFor(info, info.id === engine ? model : settings.whisperModel);
+                onChange(info.id, m);
+                // Motor (y modelo de whisper) elegidos aquí quedan como
+                // predeterminados para las próximas sesiones.
+                settings.set({
+                  defaultEngine: info.id,
+                  ...(info.id === "whisper" && m ? { whisperModel: m } : {}),
+                });
+              }}
               className={cn(
-                "flex flex-col gap-1.5 rounded-xl p-3 text-left ring-1 transition-colors",
+                "flex flex-col gap-1.5 rounded-xl p-2.5 text-left ring-1 transition-colors",
                 selected
                   ? "bg-indigo-600/10 ring-indigo-500/60"
                   : "bg-surface-2/60 ring-line/10 hover:bg-line/10",
@@ -113,7 +130,7 @@ export function EnginePicker({ engine, model, onChange, compact }: Props) {
           <Dropdown
             value={model ?? ""}
             options={installedModels.map((m) => ({ value: m.id, label: m.label }))}
-            onSelect={(v) => onChange("whisper", v)}
+            onSelect={pickWhisperModel}
             placeholder={installedModels.length ? "— elegir modelo —" : "Sin modelos descargados"}
             className="min-w-0 flex-1"
             disabled={installedModels.length === 0}

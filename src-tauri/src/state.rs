@@ -25,7 +25,8 @@ pub struct SourceHandles {
 
 pub struct LiveSession {
     pub session_id: String,
-    pub engine: EngineId,
+    /// None = solo grabación (sin transcripción en vivo).
+    pub engine: Option<EngineId>,
     pub sources: Vec<(Source, SourceHandles)>,
     pub audio_dir: PathBuf,
     pub started_at: u64,

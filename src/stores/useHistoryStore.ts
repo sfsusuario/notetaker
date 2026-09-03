@@ -17,14 +17,20 @@ export interface OpenSession {
   paths: RecordingPaths | null;
 }
 
+export const PAGE_SIZE = 12;
+
 interface HistoryState {
   sessions: Session[];
   query: string;
   loading: boolean;
+  /** página actual (0-based) y total de sesiones que cumplen el filtro */
+  page: number;
+  total: number;
   current: OpenSession | null;
   /** progreso de transcripción de archivo por sesión */
   progress: Record<string, ProgressEvent>;
   setQuery: (q: string) => void;
+  setPage: (p: number) => void;
   load: () => Promise<void>;
   open: (id: string) => Promise<OpenSession | null>;
   close: () => void;
@@ -42,19 +48,38 @@ export const useHistoryStore = create<HistoryState>((set, get) => ({
   sessions: [],
   query: "",
   loading: false,
+  page: 0,
+  total: 0,
   current: null,
   progress: {},
 
   setQuery: (query) => {
-    set({ query });
+    // Al cambiar el filtro se vuelve a la primera página.
+    set({ query, page: 0 });
+    void get().load();
+  },
+
+  setPage: (page) => {
+    set({ page: Math.max(0, page) });
     void get().load();
   },
 
   load: async () => {
     set({ loading: true });
     try {
-      const sessions = await db.listSessions({ query: get().query });
-      set({ sessions });
+      const { query, page } = get();
+      const [total, sessions] = await Promise.all([
+        db.countSessions(query),
+        db.listSessions({ query, limit: PAGE_SIZE, offset: page * PAGE_SIZE }),
+      ]);
+      // Si al borrar se vacía la última página, retrocede una.
+      if (sessions.length === 0 && page > 0 && total > 0) {
+        set({ page: page - 1, total });
+        set({ loading: false });
+        await get().load();
+        return;
+      }
+      set({ sessions, total });
     } finally {
       set({ loading: false });
     }

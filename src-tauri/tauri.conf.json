@@ -15,15 +15,16 @@
         "label": "main",
         "title": "NoteTaker",
         "url": "index.html",
-        "width": 1200,
-        "height": 800,
-        "minWidth": 900,
-        "minHeight": 600,
+        "width": 780,
+        "height": 620,
+        "minWidth": 640,
+        "minHeight": 460,
         "center": true,
-        "decorations": true,
+        "decorations": false,
         "resizable": true,
         "skipTaskbar": false,
-        "visible": false
+        "visible": true,
+        "shadow": true
       },
       {
         "label": "popup",
@@ -44,7 +45,9 @@
       "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset: http://asset.localhost; media-src 'self' blob: asset: http://asset.localhost; connect-src 'self' ipc: http://ipc.localhost https://api.anthropic.com https://api.openai.com https://generativelanguage.googleapis.com https://api.deepseek.com https://api.moonshot.ai https://api.moonshot.cn http://localhost:11434 http://127.0.0.1:11434; font-src 'self' data:",
       "assetProtocol": {
         "enable": true,
-        "scope": ["$APPLOCALDATA/recordings/**"]
+        "scope": [
+          "$APPLOCALDATA/recordings/**"
+        ]
       }
     }
   },

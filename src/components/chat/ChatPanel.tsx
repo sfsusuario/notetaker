@@ -6,7 +6,7 @@ import { PROVIDER_LABELS } from "../../services/llm/providers";
 import { useChatStore } from "../../stores/useChatStore";
 import { useSettingsStore } from "../../stores/useSettingsStore";
 import { useUiStore } from "../../stores/useUiStore";
-import type { Segment, SpeakerOverride } from "../../types";
+import type { ChatMessage, Segment, SpeakerOverride } from "../../types";
 import { IconSend, IconSparkle, IconTrash } from "../common/icons";
 import { Markdown } from "../common/Markdown";
 import { Button, IconButton, cn } from "../common/ui";
@@ -21,6 +21,10 @@ interface Props {
   className?: string;
 }
 
+// Referencia estable: un selector que devuelve un array nuevo en cada render
+// provoca un bucle infinito de re-render en zustand v5.
+const NO_MESSAGES: ChatMessage[] = [];
+
 const QUICK: Array<{ label: string; prompt: string }> = [
   { label: "Resumen", prompt: SUMMARY_PROMPT },
   { label: "Acciones", prompt: "Lista las tareas o acciones acordadas, con responsable y plazo si se mencionan." },
@@ -29,7 +33,7 @@ const QUICK: Array<{ label: string; prompt: string }> = [
 ];
 
 export function ChatPanel({ sessionId, segments, speakers, title, date, live, className }: Props) {
-  const messages = useChatStore((s) => s.bySession[sessionId] ?? []);
+  const messages = useChatStore((s) => s.bySession[sessionId] ?? NO_MESSAGES);
   const streaming = useChatStore((s) => s.streaming);
   const error = useChatStore((s) => s.error);
   const load = useChatStore((s) => s.load);

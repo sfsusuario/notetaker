@@ -20,6 +20,16 @@ Tauri 2 (Rust) + React 19 / TypeScript / Tailwind 3 / Zustand. Todo lo que toca 
         whisper-server.exe (whisper.cpp, proceso hijo, CREATE_NO_WINDOW)
 ```
 
+## Modos de sesión
+
+| Modo | `sessions.mode` | Motor | Al terminar |
+|---|---|---|---|
+| En vivo | `live` | Deepgram o Whisper | `status = done` |
+| Solo grabar | `record` | ninguno (`engine = "none"`) | `status = recorded`; se transcribe después desde el detalle |
+| Desde grabación | `file` | Deepgram o Whisper | `status = done` |
+
+En "solo grabar" el pipeline es idéntico salvo que no se instancia ningún motor: los chunks se descartan y solo se escribe el WAV. `transcribeSession()` reutiliza `transcribe_file` sobre `mic.wav` / `system.wav`, así que la transcripción posterior conserva la separación Yo/Otros.
+
 ## Flujo en vivo
 
 1. `session_start_live(cfg)` construye el `Engine` (lee la key de Deepgram del keyring o asegura `whisper-server` con el modelo pedido) y lanza un `spawn_source_stream` por fuente (mic / system).

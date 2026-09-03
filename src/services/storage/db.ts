@@ -4,6 +4,7 @@ import type {
   Segment,
   SegmentSource,
   Session,
+  SessionEngine,
   SessionMode,
   SessionStatus,
   SpeakerOverride,
@@ -59,7 +60,7 @@ function rowToSession(r: SessionRow): Session {
     createdAt: r.created_at,
     endedAt: r.ended_at,
     mode: r.mode as SessionMode,
-    engine: r.engine as Session["engine"],
+    engine: r.engine as SessionEngine,
     engineModel: r.engine_model,
     sources: parseJsonArray(r.sources) as SegmentSource[],
     language: r.language,
@@ -189,6 +190,43 @@ export async function listSessions(args: {
         [limit, offset],
       );
   return rows.map(rowToSession);
+}
+
+/**
+ * Cierra sesiones que quedaron en "recording" porque la app terminó de forma
+ * abrupta (cierre forzado, reinicio en desarrollo). El audio ya está en disco,
+ * así que se marcan como transcritas o pendientes según tengan segmentos.
+ */
+export async function closeOrphanSessions(): Promise<number> {
+  const d = await getDb();
+  const rows = await d.select<Array<{ n: number }>>(
+    "SELECT COUNT(*) AS n FROM sessions WHERE status = 'recording'",
+  );
+  const n = rows[0]?.n ?? 0;
+  if (n === 0) return 0;
+  await d.execute(`
+    UPDATE sessions
+       SET status = CASE
+             WHEN (SELECT COUNT(*) FROM segments WHERE session_id = sessions.id) > 0
+             THEN 'done' ELSE 'recorded' END,
+           ended_at = COALESCE(ended_at, created_at)
+     WHERE status = 'recording'`);
+  return n;
+}
+
+/** Total de sesiones (con el mismo filtro que `listSessions`), para paginar. */
+export async function countSessions(query?: string): Promise<number> {
+  const d = await getDb();
+  const q = query?.trim() ?? "";
+  const rows = q
+    ? await d.select<Array<{ n: number }>>(
+        `SELECT COUNT(*) AS n FROM sessions s
+          WHERE s.title LIKE $1
+             OR EXISTS (SELECT 1 FROM segments g WHERE g.session_id = s.id AND g.text LIKE $1)`,
+        [`%${q}%`],
+      )
+    : await d.select<Array<{ n: number }>>("SELECT COUNT(*) AS n FROM sessions");
+  return rows[0]?.n ?? 0;
 }
 
 export async function deleteSession(id: string): Promise<void> {

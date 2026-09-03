@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
 use super::pipeline::{spawn_source_stream, StartedSource};
-use crate::audio::wav::mix_to_file;
+use crate::audio::wav::{mix_to_file, wav_duration_ms};
 use crate::paths;
 use crate::state::{AppState, LiveSession};
 use crate::stt::{now_ms, Engine, EngineId, Source, SttSpec};
@@ -16,7 +16,8 @@ use crate::stt::{now_ms, Engine, EngineId, Source, SttSpec};
 #[serde(rename_all = "camelCase")]
 pub struct LiveConfig {
     pub session_id: String,
-    pub engine: EngineId,
+    /// None = solo grabar (se guarda el WAV y se transcribe más tarde).
+    pub engine: Option<EngineId>,
     pub model: Option<String>,
     pub sources: Vec<Source>,
     pub mic_device_id: Option<String>,
@@ -47,7 +48,7 @@ pub struct StopResult {
 #[serde(rename_all = "camelCase")]
 pub struct LiveStatus {
     pub session_id: String,
-    pub engine: EngineId,
+    pub engine: Option<EngineId>,
     pub sources: Vec<Source>,
     pub paused: bool,
     pub started_at: u64,
@@ -69,7 +70,10 @@ pub async fn session_start_live(
         return Err("La fuente 'archivo' no es válida en una sesión en vivo.".into());
     }
     let threads = cfg.whisper_threads.unwrap_or(4);
-    let engine = Engine::build(&app, &state, cfg.engine, cfg.model.clone(), threads).await?;
+    let engine = match cfg.engine {
+        Some(id) => Some(Engine::build(&app, &state, id, cfg.model.clone(), threads).await?),
+        None => None,
+    };
     let audio_dir = paths::session_audio_dir(&app, &cfg.session_id)?;
     paths::ensure_dir(&audio_dir)?;
     let language = cfg.language.clone().unwrap_or_else(|| "auto".into());
@@ -139,7 +143,8 @@ pub async fn stop_live(app: &AppHandle, state: &Arc<AppState>, reason: &str) -> 
         h.capture.stop();
     }
     let mut wavs = Vec::new();
-    for (_, mut h) in session.sources {
+    let mut sources: Vec<(Source, std::path::PathBuf)> = Vec::new();
+    for (src, mut h) in session.sources {
         if let Some(p) = h.pipeline.take() {
             if tokio::time::timeout(Duration::from_secs(5), p).await.is_err() {
                 let _ = h.stop_tx.send(true);
@@ -150,7 +155,27 @@ pub async fn stop_live(app: &AppHandle, state: &Arc<AppState>, reason: &str) -> 
                 let _ = h.stop_tx.send(true);
             }
         }
+        sources.push((src, h.wav_path.clone()));
         wavs.push(h.wav_path.clone());
+    }
+
+    // Aviso si alguna fuente no capturó nada: pasa, por ejemplo, cuando la
+    // salida activa es un auricular Bluetooth en modo manos libres, donde el
+    // loopback de Windows no entrega audio.
+    for (src, path) in &sources {
+        if wav_duration_ms(path).unwrap_or(0) < 300 {
+            let what = match src {
+                Source::Mic => "del micrófono",
+                Source::System => "del sistema",
+                Source::File => "del archivo",
+            };
+            crate::stt::emit_error(
+                app,
+                format!(
+                    "No se capturó audio {what} en esta sesión. Revisa el dispositivo elegido (los auriculares Bluetooth en modo manos libres no permiten grabar el audio del sistema)."
+                ),
+            );
+        }
     }
 
     // 2) Mezcla para reproducción

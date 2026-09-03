@@ -28,7 +28,8 @@ export function PopupWindow() {
   const settings = useSettingsStore();
   const [meeting, setMeeting] = useState<MeetingInfo | null>(null);
   const [engines, setEngines] = useState<EngineInfo[]>([]);
-  const [engine, setEngine] = useState<EngineId>(settings.defaultEngine);
+  // "none" = solo grabar; útil si falta la API key o el modelo local.
+  const [engine, setEngine] = useState<EngineId | "none">(settings.defaultEngine);
   const [model, setModel] = useState<string | null>(null);
   const [sources, setSources] = useState<AudioSource[]>(settings.defaultSources);
   const [language, setLanguage] = useState(settings.language);
@@ -74,8 +75,14 @@ export function PopupWindow() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const recordOnly = engine === "none";
   const info = engines.find((e) => e.id === engine);
   const changeEngine = (id: string) => {
+    if (id === "none") {
+      setEngine("none");
+      setModel(null);
+      return;
+    }
     const e = id as EngineId;
     setEngine(e);
     const inf = engines.find((x) => x.id === e);
@@ -84,7 +91,12 @@ export function PopupWindow() {
   };
 
   const start = () => {
-    const config: QuickStartConfig = { engine, model, sources, language };
+    const config: QuickStartConfig = {
+      engine: recordOnly ? null : (engine as EngineId),
+      model,
+      sources,
+      language,
+    };
     void popupAction("start", config);
   };
 
@@ -114,11 +126,18 @@ export function PopupWindow() {
         <div className="flex items-center gap-2">
           <Dropdown
             value={engine}
-            options={engines.map((e) => ({ value: e.id, label: e.label }))}
+            options={[
+              ...engines.map((e) => ({ value: e.id as string, label: e.label })),
+              { value: "none", label: "Solo grabar (transcribir después)" },
+            ]}
             onSelect={changeEngine}
             className="min-w-0 flex-1"
           />
-          {info && (info.diarization ? <Badge tone="ok">Hablantes</Badge> : <Badge tone="warn">Yo/Otros</Badge>)}
+          {recordOnly ? (
+            <Badge tone="info">Sin IA</Badge>
+          ) : (
+            info && (info.diarization ? <Badge tone="ok">Hablantes</Badge> : <Badge tone="warn">Yo/Otros</Badge>)
+          )}
         </div>
         <span className="text-fg-muted">Audio</span>
         <div className="flex gap-1">
@@ -142,18 +161,33 @@ export function PopupWindow() {
             </button>
           ))}
         </div>
-        <span className="text-fg-muted">Idioma</span>
-        <Dropdown value={language} options={LANGUAGES.map(([v, l]) => ({ value: v, label: l }))} onSelect={setLanguage} className="min-w-0" />
+        {!recordOnly && (
+          <>
+            <span className="text-fg-muted">Idioma</span>
+            <Dropdown value={language} options={LANGUAGES.map(([v, l]) => ({ value: v, label: l }))} onSelect={setLanguage} className="min-w-0" />
+          </>
+        )}
       </div>
 
       <div className="mt-auto flex items-center justify-between gap-2 px-3 py-2.5">
-        <span className={cn("text-[10px]", info?.ready ? "text-fg-muted" : "text-amber-500")}>
-          {info ? (info.ready ? info.readiness : `⚠ ${info.readiness}`) : ""}
+        <span className={cn("text-[10px]", recordOnly || info?.ready ? "text-fg-muted" : "text-amber-500")}>
+          {recordOnly
+            ? "Solo se guarda el audio"
+            : info
+              ? info.ready
+                ? info.readiness
+                : `⚠ ${info.readiness}`
+              : ""}
         </span>
         <div className="flex gap-1.5">
           <Button size="sm" onClick={() => void popupAction("ignore")}>Ignorar</Button>
-          <Button size="sm" variant="primary" disabled={!info?.ready || sources.length === 0} onClick={start}>
-            <IconRecord width={13} height={13} /> Iniciar transcripción
+          <Button
+            size="sm"
+            variant="primary"
+            disabled={(!recordOnly && !info?.ready) || sources.length === 0}
+            onClick={start}
+          >
+            <IconRecord width={13} height={13} /> {recordOnly ? "Grabar" : "Transcribir"}
           </Button>
         </div>
       </div>

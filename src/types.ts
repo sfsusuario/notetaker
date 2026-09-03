@@ -8,9 +8,14 @@ export type AudioSource = "mic" | "system";
 /** Origen de un segmento (en vivo: mic/system; desde archivo: file). */
 export type SegmentSource = "mic" | "system" | "file";
 
-export type SessionMode = "live" | "file";
+/** live = transcribe mientras graba · record = solo graba · file = archivo ya existente */
+export type SessionMode = "live" | "record" | "file";
 
-export type SessionStatus = "recording" | "processing" | "done" | "error";
+/** recorded = audio guardado y pendiente de transcribir */
+export type SessionStatus = "recording" | "processing" | "done" | "error" | "recorded";
+
+/** Motor con el que se transcribió; "none" = grabada sin transcribir todavía. */
+export type SessionEngine = EngineId | "none";
 
 export interface Segment {
   id: string;
@@ -36,7 +41,7 @@ export interface Session {
   createdAt: number;
   endedAt: number | null;
   mode: SessionMode;
-  engine: EngineId;
+  engine: SessionEngine;
   engineModel: string | null;
   sources: SegmentSource[];
   language: string | null;
@@ -181,7 +186,8 @@ export interface MeetingApps {
 
 export interface LiveConfig {
   sessionId: string;
-  engine: EngineId;
+  /** null = solo grabar (se transcribe después desde el historial) */
+  engine: EngineId | null;
   model?: string | null;
   sources: AudioSource[];
   micDeviceId?: string | null;
@@ -203,7 +209,8 @@ export interface FileConfig {
 
 /** Ajustes rápidos que el popup envía a la ventana principal. */
 export interface QuickStartConfig {
-  engine: EngineId;
+  /** null = solo grabar */
+  engine: EngineId | null;
   model: string | null;
   sources: AudioSource[];
   language: string;

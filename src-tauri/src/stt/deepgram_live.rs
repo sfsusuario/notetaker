@@ -1,6 +1,6 @@
 //! Cliente Deepgram en streaming (WebSocket). Adaptado de custom-iv:
 //! KeepAlive bajo silencio, backoff [1,2,5,10], ids deterministas. Cambios:
-//! diarización (`diarize=true&diarize_model=v1`), audio continuo (sin gating
+//! diarización (`diarize=true`; la API rechaza `diarize_model` junto a `diarize`), audio continuo (sin gating
 //! VAD) y `conn_offset_ms` para alinear los timestamps de cada conexión con la
 //! línea de tiempo del WAV guardado.
 use std::collections::HashMap;
@@ -130,16 +130,13 @@ fn handle_text_message(app: &AppHandle, ctx: &Ctx, raw: &str) {
     );
 }
 
-fn build_url(language: &str, with_diarize_model: bool) -> String {
+/// `diarize=true` basta: la API rechaza `diarize_model` combinado con `diarize`.
+fn build_url(language: &str) -> String {
     let language = if language == "auto" { "multi" } else { language };
-    let mut url = format!(
+    format!(
         "wss://api.deepgram.com/v1/listen?model=nova-3&encoding=linear16&sample_rate={}&channels=1&interim_results=true&punctuate=true&smart_format=true&diarize=true&language={}",
         crate::audio::TARGET_RATE, language
-    );
-    if with_diarize_model {
-        url.push_str("&diarize_model=v1");
-    }
-    url
+    )
 }
 
 const BACKOFF_SECS: [u64; 4] = [1, 2, 5, 10];
@@ -170,7 +167,6 @@ pub async fn run(
         conn_offset_ms: 0,
     };
     let mut retry: u32 = 0;
-    let mut with_diarize_model = true;
 
     'outer: loop {
         if *stop_rx.borrow() {
@@ -178,7 +174,7 @@ pub async fn run(
         }
         emit_status(&app, status(&ctx, "reconnecting", 0, retry, None));
 
-        let url = build_url(&ctx.spec.language, with_diarize_model);
+        let url = build_url(&ctx.spec.language);
         let request = match url.clone().into_client_request() {
             Ok(mut req) => match format!("Token {}", api_key).parse() {
                 Ok(value) => {
@@ -284,10 +280,10 @@ pub async fn run(
                     .map(|b| String::from_utf8_lossy(b).to_string())
                     .unwrap_or_default();
                 eprintln!("[deepgram] HTTP {code}: {body}");
-                if code == 400 && with_diarize_model {
-                    // El parámetro diarize_model no está disponible: reintentar sin él.
-                    with_diarize_model = false;
-                    continue 'outer;
+                if code == 400 {
+                    emit_error(&app, format!("Deepgram rechazó la petición (400): {}", &body[..body.len().min(200)]));
+                    emit_status(&app, status(&ctx, "disconnected", 0, retry, Some("Parámetros rechazados".into())));
+                    break 'outer;
                 }
                 if code == 401 || code == 403 {
                     emit_error(&app, "Deepgram rechazó la API key (401). Revísala en Ajustes.");

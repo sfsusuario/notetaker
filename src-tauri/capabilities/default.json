@@ -2,7 +2,9 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capabilities for the main window",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "core:event:default",
@@ -31,6 +33,14 @@
     "dialog:allow-save",
     "dialog:allow-confirm",
     "dialog:allow-message",
-    "opener:default"
+    "opener:default",
+    "core:window:allow-outer-size",
+    "core:window:allow-is-minimized",
+    "core:window:allow-maximize",
+    "core:window:allow-center",
+    "core:window:allow-available-monitors",
+    "core:window:allow-current-monitor",
+    "core:window:allow-primary-monitor",
+    "core:window:allow-scale-factor"
   ]
 }

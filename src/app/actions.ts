@@ -3,8 +3,9 @@
  * bandeja). Coordina comandos nativos, DB y stores.
  */
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { confirm } from "@tauri-apps/plugin-dialog";
+import { confirmDialog } from "../components/common/ConfirmDialog";
 import {
+  fileSize,
   meetingDetectionSet,
   recordingPaths,
   sessionPause,
@@ -31,11 +32,18 @@ import type {
   StopResult,
 } from "../types";
 import { defaultTitle, newId } from "./format";
+import { restoreWindowState, watchWindowState } from "./windowState";
 
 const toast = (text: string, kind: "info" | "ok" | "error" = "info") =>
   useUiStore.getState().toast(text, kind);
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+const SOURCE_LABEL: Record<SegmentSource, string> = {
+  mic: "Micrófono",
+  system: "Sistema",
+  file: "Archivo",
+};
 
 // ── Arranque ────────────────────────────────────────────────────────────────
 
@@ -48,6 +56,9 @@ export async function bootstrap(): Promise<void> {
 
   await syncDetectionToBackend();
   void useEnginesStore.getState().refresh();
+  // Sesiones que quedaron "grabando" por un cierre abrupto: se cierran antes
+  // de pintar el historial para que no aparezcan como activas para siempre.
+  await db.closeOrphanSessions().catch(() => 0);
   void useHistoryStore.getState().load();
 
   // Si el backend tiene una sesión huérfana (recarga del WebView), se cierra.
@@ -60,8 +71,13 @@ export async function bootstrap(): Promise<void> {
     /* ignore */
   }
 
-  if (!settings.startMinimized) {
-    const w = getCurrentWindow();
+  await restoreWindowState();
+  void watchWindowState();
+
+  const w = getCurrentWindow();
+  if (settings.startMinimized) {
+    await w.hide();
+  } else {
     await w.show();
     await w.setFocus();
   }
@@ -79,7 +95,8 @@ export async function syncDetectionToBackend(): Promise<void> {
 // ── Sesión en vivo ──────────────────────────────────────────────────────────
 
 export interface StartLiveOptions {
-  engine?: EngineId;
+  /** null = solo grabar (sin transcripción en vivo) */
+  engine?: EngineId | null;
   model?: string | null;
   sources?: AudioSource[];
   language?: string;
@@ -89,9 +106,16 @@ export interface StartLiveOptions {
 
 export async function startLive(opts: StartLiveOptions = {}): Promise<boolean> {
   const s = useSettingsStore.getState();
-  const engine = opts.engine ?? s.defaultEngine;
+  // `undefined` = usar el motor por defecto; `null` = solo grabar.
+  const engine = opts.engine !== undefined ? opts.engine : s.defaultEngine;
   const model =
-    opts.model !== undefined ? opts.model : engine === "whisper" ? s.whisperModel : "nova-3";
+    engine === null
+      ? null
+      : opts.model !== undefined
+        ? opts.model
+        : engine === "whisper"
+          ? s.whisperModel
+          : "nova-3";
   const sources = opts.sources ?? s.defaultSources;
   const cfg: LiveConfig = {
     sessionId: newId(),
@@ -114,8 +138,8 @@ export async function startLive(opts: StartLiveOptions = {}): Promise<boolean> {
   try {
     await db.insertSession({
       id: cfg.sessionId,
-      mode: "live",
-      engine,
+      mode: engine === null ? "record" : "live",
+      engine: engine ?? "none",
       engineModel: model,
       sources,
       language: cfg.language ?? null,
@@ -138,10 +162,13 @@ export async function startLive(opts: StartLiveOptions = {}): Promise<boolean> {
 export async function finalizeLiveSession(result: StopResult | null, sessionId: string) {
   const live = useSessionStore.getState();
   const segments = live.sessionId === sessionId ? live.segments : [];
+  const session = await db.getSession(sessionId);
+  const recordOnly = session?.mode === "record";
   await db.updateSession(sessionId, {
     endedAt: Date.now(),
     durationMs: result?.durationMs ?? null,
-    status: "done",
+    // "recorded": audio guardado, pendiente de transcribir desde el historial.
+    status: recordOnly ? "recorded" : "done",
   });
   live.reset();
   await useHistoryStore.getState().load();
@@ -232,22 +259,44 @@ export async function startFromFile(
   }
 }
 
-export async function retranscribe(
+/**
+ * Transcribe una sesión a partir del audio guardado. Sirve tanto para una
+ * grabación sin transcribir como para rehacerla con otro motor.
+ */
+export async function transcribeSession(
   sessionId: string,
   opts: { engine: EngineId; model: string | null; language: string },
 ): Promise<void> {
-  const ok = await confirm(
-    "Se reemplazará la transcripción actual de esta sesión. ¿Continuar?",
-    { title: "Retranscribir", kind: "warning" },
-  );
-  if (!ok) return;
+  const existing = await db.getSegments(sessionId);
+  if (existing.length > 0) {
+    const ok = await confirmDialog({
+      title: "Volver a transcribir",
+      message:
+        "Se reemplazará la transcripción actual y las etiquetas de hablante de esta sesión. El audio guardado no se toca.",
+      confirmLabel: "Transcribir de nuevo",
+    });
+    if (!ok) return;
+  }
   const paths = await recordingPaths(sessionId);
-  const jobs: Array<{ path: string; source: SegmentSource }> = [];
-  if (paths.mic) jobs.push({ path: paths.mic, source: "mic" });
-  if (paths.system) jobs.push({ path: paths.system, source: "system" });
-  if (jobs.length === 0 && paths.file) jobs.push({ path: paths.file, source: "file" });
-  if (jobs.length === 0) {
+  const all: Array<{ path: string; source: SegmentSource }> = [];
+  if (paths.mic) all.push({ path: paths.mic, source: "mic" });
+  if (paths.system) all.push({ path: paths.system, source: "system" });
+  if (all.length === 0 && paths.file) all.push({ path: paths.file, source: "file" });
+  if (all.length === 0) {
     toast("Esta sesión no tiene audio guardado.", "error");
+    return;
+  }
+  // Una pista sin audio (WAV de solo cabecera) no se envía al motor: fallaría
+  // al decodificar y no aporta nada.
+  const jobs: typeof all = [];
+  const skipped: string[] = [];
+  for (const j of all) {
+    const bytes = await fileSize(j.path).catch(() => 0);
+    if (bytes > 1024) jobs.push(j);
+    else skipped.push(SOURCE_LABEL[j.source]);
+  }
+  if (jobs.length === 0) {
+    toast(`No hay audio que transcribir (pistas vacías: ${skipped.join(", ")}).`, "error");
     return;
   }
   const s = useSettingsStore.getState();
@@ -260,8 +309,14 @@ export async function retranscribe(
   });
   useHistoryStore.getState().replaceSegments(sessionId, []);
   await useHistoryStore.getState().refreshCurrent();
-  try {
-    for (const j of jobs) {
+
+  // Cada fuente se transcribe por separado. Si una pista falla (por ejemplo,
+  // el micrófono quedó mudo y el WAV está vacío) se sigue con las demás en vez
+  // de descartar todo el trabajo.
+  const failures: string[] = [];
+  let cancelled = false;
+  for (const j of jobs) {
+    try {
       await transcribeFile({
         sessionId,
         engine: opts.engine,
@@ -272,13 +327,32 @@ export async function retranscribe(
         copyAudio: false,
         whisperThreads: s.whisperThreads,
       });
+    } catch (e) {
+      const msg = errText(e);
+      if (msg === "Cancelado") {
+        cancelled = true;
+        break;
+      }
+      failures.push(`${SOURCE_LABEL[j.source]}: ${msg}`);
     }
+  }
+
+  const produced = (await db.getSegments(sessionId)).length;
+  if (cancelled) {
+    await db.updateSession(sessionId, { status: produced > 0 ? "done" : "recorded" });
+    toast("Transcripción cancelada");
+  } else if (produced > 0) {
     await db.updateSession(sessionId, { status: "done" });
-    toast("Retranscripción completada", "ok");
-  } catch (e) {
-    const msg = errText(e);
-    await db.updateSession(sessionId, { status: msg === "Cancelado" ? "done" : "error" });
-    toast(msg, msg === "Cancelado" ? "info" : "error");
+    const notes = [...failures, ...skipped.map((x) => `${x}: sin audio grabado`)];
+    if (notes.length > 0) {
+      toast(`Transcripción completada, con avisos — ${notes.join(" · ")}`, "info");
+    } else {
+      toast(existing.length > 0 ? "Retranscripción completada" : "Transcripción completada", "ok");
+    }
+    void maybeGenerateTitle(sessionId);
+  } else {
+    await db.updateSession(sessionId, { status: "error" });
+    toast(failures.join(" · ") || "No se obtuvo ninguna transcripción.", "error");
   }
   await useHistoryStore.getState().load();
   await useHistoryStore.getState().refreshCurrent();
@@ -296,9 +370,11 @@ export async function openSession(id: string): Promise<void> {
 }
 
 export async function deleteSessionFully(id: string): Promise<boolean> {
-  const ok = await confirm("Se eliminará la sesión, su transcripción, el chat y el audio guardado.", {
+  const ok = await confirmDialog({
     title: "Eliminar sesión",
-    kind: "warning",
+    message: "Se eliminará la sesión, su transcripción, el chat y el audio guardado. No se puede deshacer.",
+    confirmLabel: "Eliminar",
+    danger: true,
   });
   if (!ok) return false;
   await useHistoryStore.getState().remove(id);

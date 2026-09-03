@@ -1,5 +1,7 @@
 //! Pipeline de una fuente en vivo: captura (cpal) → remuestreo a 16 kHz →
 //! WAV en disco → chunks de 100 ms al motor + métricas a 10 Hz.
+//! Sin motor (modo "solo grabar") solo se escribe el WAV; la sesión se puede
+//! transcribir después desde el historial.
 //! La línea de tiempo (`position_ms`) avanza solo con audio escrito al WAV,
 //! así los timestamps de los segmentos coinciden con la grabación.
 use std::path::PathBuf;
@@ -41,7 +43,7 @@ struct MetricsPayload {
 pub fn spawn_source_stream(
     app: AppHandle,
     state: Arc<AppState>,
-    engine: Engine,
+    engine: Option<Engine>,
     spec: SttSpec,
     device_id: Option<String>,
     wav_path: PathBuf,
@@ -129,14 +131,22 @@ pub fn spawn_source_stream(
         })
     };
 
-    // Motor
-    let engine_task = {
-        let app = app.clone();
-        let spec = spec.clone();
-        let stop_rx = stop_rx.clone();
-        tauri::async_runtime::spawn(async move {
-            engine.run_live(app, state, spec, chunk_rx, stop_rx).await;
-        })
+    // Motor (ausente en modo "solo grabar")
+    let engine_task = match engine {
+        Some(engine) => {
+            let app = app.clone();
+            let spec = spec.clone();
+            let stop_rx = stop_rx.clone();
+            Some(tauri::async_runtime::spawn(async move {
+                engine.run_live(app, state, spec, chunk_rx, stop_rx).await;
+            }))
+        }
+        None => {
+            // Nadie consume los chunks: try_send falla y se descartan.
+            drop(chunk_rx);
+            drop(state);
+            None
+        }
     };
 
     Ok((
@@ -145,7 +155,7 @@ pub fn spawn_source_stream(
             capture: capture_handle,
             paused,
             pipeline: Some(pipeline),
-            engine: Some(engine_task),
+            engine: engine_task,
             wav_path,
         },
         StartedSource {

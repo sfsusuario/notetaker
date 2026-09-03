@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import { IconChevron } from "./icons";
 
 export function cn(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(" ");
@@ -35,7 +36,8 @@ export function Menu({
   const btnRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{
-    top: number;
+    top?: number;
+    bottom?: number;
     left?: number;
     right?: number;
     maxHeight: number;
@@ -45,9 +47,17 @@ export function Menu({
   useLayoutEffect(() => {
     if (!open || !btnRef.current) return;
     const r = btnRef.current.getBoundingClientRect();
-    const top = r.bottom + 4;
     const margin = 8;
+    const gap = 4;
     const w = panelRef.current?.offsetWidth ?? 0;
+    const h = panelRef.current?.offsetHeight ?? 0;
+    const below = window.innerHeight - r.bottom - margin;
+    const above = r.top - margin;
+    // En las últimas filas de una lista no cabe debajo: se abre hacia arriba.
+    const flip = h > below && above > below;
+    const vertical = flip
+      ? { bottom: window.innerHeight - r.top + gap, maxHeight: above - gap }
+      : { top: r.bottom + gap, maxHeight: below - gap };
     let side: { left?: number; right?: number };
     if (align === "right") {
       let right = window.innerWidth - r.right;
@@ -62,7 +72,7 @@ export function Menu({
       }
       side = { left };
     }
-    setPos({ top, maxHeight: window.innerHeight - top - 12, ...side });
+    setPos({ ...vertical, ...side });
   }, [open, align]);
 
   return (
@@ -96,6 +106,7 @@ export function Menu({
               ref={panelRef}
               style={{
                 top: pos.top,
+                bottom: pos.bottom,
                 left: pos.left,
                 right: pos.right,
                 maxHeight: pos.maxHeight,
@@ -142,7 +153,14 @@ export function Dropdown({
 }) {
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
-  const [pos, setPos] = useState({ top: 0, left: 0, width: 0, maxHeight: 240 });
+  const listRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{
+    top?: number;
+    bottom?: number;
+    left: number;
+    width: number;
+    maxHeight: number;
+  }>({ top: 0, left: 0, width: 0, maxHeight: 240 });
   const opts: DropdownOption[] = options.map((o) =>
     typeof o === "string" ? { value: o, label: o } : o,
   );
@@ -151,13 +169,29 @@ export function Dropdown({
   useLayoutEffect(() => {
     if (!open || !btnRef.current) return;
     const r = btnRef.current.getBoundingClientRect();
-    const top = r.bottom + 4;
-    setPos({
-      top,
-      left: r.left,
-      width: Math.max(r.width, 160),
-      maxHeight: Math.max(120, Math.min(280, window.innerHeight - top - 12)),
-    });
+    const margin = 8;
+    const gap = 4;
+    const h = listRef.current?.offsetHeight ?? 0;
+    const below = window.innerHeight - r.bottom - margin;
+    const above = r.top - margin;
+    const flip = h > below && above > below;
+    const width = Math.max(r.width, 160);
+    const left = Math.max(margin, Math.min(r.left, window.innerWidth - width - margin));
+    setPos(
+      flip
+        ? {
+            bottom: window.innerHeight - r.top + gap,
+            left,
+            width,
+            maxHeight: Math.max(120, Math.min(280, above - gap)),
+          }
+        : {
+            top: r.bottom + gap,
+            left,
+            width,
+            maxHeight: Math.max(120, Math.min(280, below - gap)),
+          },
+    );
   }, [open]);
 
   useEffect(() => {
@@ -201,8 +235,10 @@ export function Dropdown({
               onClick={() => setOpen(false)}
             />
             <div
+              ref={listRef}
               style={{
                 top: pos.top,
+                bottom: pos.bottom,
                 left: pos.left,
                 width: pos.width,
                 maxHeight: pos.maxHeight,
@@ -243,12 +279,15 @@ export function MenuItem({
   active,
   disabled,
   danger,
+  icon,
   onClick,
   children,
 }: {
   active?: boolean;
   disabled?: boolean;
   danger?: boolean;
+  /** Icono a la izquierda; ocupa un hueco fijo para que el texto quede alineado. */
+  icon?: ReactNode;
   onClick: () => void;
   children: ReactNode;
 }) {
@@ -269,8 +308,18 @@ export function MenuItem({
             : "text-fg hover:bg-line/10",
       )}
     >
-      {children}
-      {active && <span className="text-indigo-400">✓</span>}
+      <span className="flex min-w-0 items-center gap-2">
+        <span
+          className={cn(
+            "flex h-4 w-4 shrink-0 items-center justify-center",
+            danger ? "text-rose-400" : active ? "text-indigo-400" : "text-fg-muted",
+          )}
+        >
+          {icon}
+        </span>
+        <span className="truncate">{children}</span>
+      </span>
+      {active && <span className="shrink-0 text-indigo-400">✓</span>}
     </button>
   );
 }
@@ -556,5 +605,54 @@ export function Modal({
       </div>
     </div>,
     document.body,
+  );
+}
+
+/**
+ * Sección plegable: cerrada muestra un resumen a la derecha del título, así
+ * la pantalla queda compacta y solo se despliega lo que se quiere configurar.
+ */
+export function Collapsible({
+  title,
+  summary,
+  defaultOpen = false,
+  open: controlled,
+  onToggle,
+  action,
+  children,
+  className,
+}: {
+  title: ReactNode;
+  summary?: ReactNode;
+  defaultOpen?: boolean;
+  open?: boolean;
+  onToggle?: (open: boolean) => void;
+  action?: ReactNode;
+  children: ReactNode;
+  className?: string;
+}) {
+  const [inner, setInner] = useState(defaultOpen);
+  const open = controlled ?? inner;
+  const toggle = () => (onToggle ? onToggle(!open) : setInner(!open));
+  return (
+    <section className={cn("rounded-2xl bg-surface ring-1 ring-line/10", className)}>
+      <div className="flex items-center gap-2 pr-2">
+        <button
+          type="button"
+          onClick={toggle}
+          className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2.5 text-left"
+        >
+          <span className={cn("shrink-0 text-fg-muted transition-transform", open && "rotate-180")}>
+            <IconChevron width={14} height={14} />
+          </span>
+          <span className="shrink-0 text-sm font-semibold text-fg">{title}</span>
+          {!open && summary && (
+            <span className="ml-1 min-w-0 truncate text-[11px] text-fg-muted">{summary}</span>
+          )}
+        </button>
+        {action}
+      </div>
+      {open && <div className="border-t border-line/10 px-3 pb-3 pt-2.5">{children}</div>}
+    </section>
   );
 }

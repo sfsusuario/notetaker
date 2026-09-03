@@ -4,19 +4,24 @@ import {
   cancelFileJob,
   deleteSessionFully,
   maybeGenerateTitle,
-  retranscribe,
+  transcribeSession,
 } from "../../../app/actions";
 import { fmtDate, fmtDuration, fmtMs } from "../../../app/format";
 import { ChatPanel } from "../../../components/chat/ChatPanel";
 import {
   IconArrowLeft,
+  IconBraces,
+  IconCopy,
+  IconDownload,
   IconEdit,
+  IconFileText,
   IconFolder,
   IconMore,
   IconRefresh,
   IconSparkle,
   IconTrash,
 } from "../../../components/common/icons";
+import { useSettingsStore } from "../../../stores/useSettingsStore";
 import {
   Badge,
   Button,
@@ -32,32 +37,35 @@ import {
 import { TranscriptFeed } from "../../../components/transcript/TranscriptFeed";
 import { openPath } from "../../../services/ipc/native";
 import * as db from "../../../services/storage/db";
-import { exportSession } from "../../../services/storage/export";
+import { copyTranscript, exportSession } from "../../../services/storage/export";
 import { useHistoryStore } from "../../../stores/useHistoryStore";
 import type { ExportFormat } from "../../../stores/useSettingsStore";
 import { useUiStore } from "../../../stores/useUiStore";
 import { LANGUAGES, type EngineId } from "../../../types";
 import { EnginePicker } from "../new/EnginePicker";
 
-function RetranscribeModal({
+function TranscribeModal({
   onClose,
   sessionId,
   engine0,
   model0,
   language0,
+  first,
 }: {
   onClose: () => void;
   sessionId: string;
   engine0: EngineId;
   model0: string | null;
   language0: string;
+  /** true = la sesión aún no se ha transcrito nunca */
+  first: boolean;
 }) {
   const [engine, setEngine] = useState<EngineId>(engine0);
   const [model, setModel] = useState<string | null>(model0);
   const [language, setLanguage] = useState(language0);
   return (
     <Modal
-      title="Retranscribir con…"
+      title={first ? "Transcribir grabación" : "Retranscribir con…"}
       onClose={onClose}
       wide
       footer={
@@ -67,10 +75,10 @@ function RetranscribeModal({
             variant="primary"
             onClick={() => {
               onClose();
-              void retranscribe(sessionId, { engine, model, language });
+              void transcribeSession(sessionId, { engine, model, language });
             }}
           >
-            Retranscribir
+            {first ? "Transcribir" : "Retranscribir"}
           </Button>
         </>
       }
@@ -82,7 +90,10 @@ function RetranscribeModal({
           <Dropdown value={language} options={LANGUAGES.map(([v, l]) => ({ value: v, label: l }))} onSelect={setLanguage} className="w-56" />
         </div>
         <p className="text-[11px] text-fg-muted">
-          Se usará el audio guardado de la sesión. La transcripción y las etiquetas de hablante actuales se reemplazan.
+          Se usará el audio guardado de la sesión.
+          {first
+            ? " Cada fuente (micrófono y sistema) se transcribe por separado."
+            : " La transcripción y las etiquetas de hablante actuales se reemplazan."}
         </p>
       </div>
     </Modal>
@@ -132,6 +143,9 @@ export function SessionView() {
   const rename = useHistoryStore((h) => h.rename);
   const setSpeakerLabel = useHistoryStore((h) => h.setSpeakerLabel);
   const patchSession = useHistoryStore((h) => h.patchSession);
+  const chatOpen = useSettingsStore((s) => s.sessionChatOpen);
+  const defaultEngine = useSettingsStore((s) => s.defaultEngine);
+  const setSettings = useSettingsStore((s) => s.set);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [retrans, setRetrans] = useState(false);
@@ -164,6 +178,10 @@ export function SessionView() {
   const { session, segments, speakers, paths } = current;
   const audioSrc = paths?.mix ?? paths?.file ?? paths?.system ?? paths?.mic ?? null;
   const processing = session.status === "processing";
+  // Grabación con audio pero sin transcripción: se ofrece transcribirla.
+  const untranscribed = !processing && segments.length === 0 && !!audioSrc;
+  // En sesiones grabadas se deja siempre a mano volver a transcribir.
+  const offerTranscribe = !processing && !!audioSrc && (untranscribed || session.mode === "record");
   const titleText = session.title ?? `Sesión ${fmtDate(session.createdAt)}`;
 
   const commitTitle = async () => {
@@ -175,6 +193,11 @@ export function SessionView() {
     const chat = await db.listChatMessages(session.id);
     const p = await exportSession({ session, segments, speakers, chat }, format);
     if (p) toast(`Exportado a ${p}`, "ok");
+  };
+
+  const doCopy = async () => {
+    const ok = await copyTranscript({ session, segments, speakers });
+    toast(ok ? "Transcripción copiada en Markdown" : "No se pudo copiar al portapapeles", ok ? "ok" : "error");
   };
 
   const saveNotes = async () => {
@@ -193,7 +216,7 @@ export function SessionView() {
   return (
     <div className="flex h-full min-w-0">
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="border-b border-line/10 px-4 py-2.5">
+        <header className="border-b border-line/10 px-3 py-1.5">
           <div className="flex items-center gap-2">
             <IconButton title="Volver al historial" onClick={() => navigate("history")}>
               <IconArrowLeft width={16} height={16} />
@@ -221,30 +244,80 @@ export function SessionView() {
                 <IconEdit width={14} height={14} className="shrink-0 text-fg-muted opacity-0 group-hover:opacity-100" />
               </button>
             )}
+            {untranscribed && <Badge tone="info">Sin transcribir</Badge>}
             {processing && (
               <Badge tone="warn">
                 <Spinner className="h-2.5 w-2.5" /> Procesando
               </Badge>
             )}
+            {segments.length > 0 && (
+              <IconButton title="Copiar transcripción (Markdown)" onClick={() => void doCopy()}>
+                <IconCopy width={15} height={15} />
+              </IconButton>
+            )}
+            {offerTranscribe && (
+              <Button
+                size="sm"
+                variant={untranscribed ? "primary" : "ghost"}
+                onClick={() => setRetrans(true)}
+                title="Elegir motor y transcribir el audio guardado"
+              >
+                <IconRefresh width={13} height={13} />
+                {untranscribed ? "Transcribir" : "Volver a transcribir"}
+              </Button>
+            )}
+            <IconButton
+              title={chatOpen ? "Ocultar chat de IA" : "Preguntar a la IA"}
+              onClick={() => setSettings({ sessionChatOpen: !chatOpen })}
+              className={cn(chatOpen && "bg-indigo-600/15 text-indigo-400")}
+            >
+              <IconSparkle width={16} height={16} />
+            </IconButton>
             <Menu trigger={() => <IconMore width={16} height={16} />} title="Acciones">
               {(close) => (
                 <>
-                  <MenuItem onClick={() => { close(); void doExport("md"); }}>Exportar Markdown</MenuItem>
-                  <MenuItem onClick={() => { close(); void doExport("txt"); }}>Exportar texto</MenuItem>
-                  <MenuItem onClick={() => { close(); void doExport("json"); }}>Exportar JSON</MenuItem>
-                  <MenuItem disabled={processing} onClick={() => { close(); setRetrans(true); }}>
-                    <span className="flex items-center gap-2"><IconRefresh width={13} height={13} /> Retranscribir con…</span>
+                  <MenuItem
+                    icon={<IconCopy width={14} height={14} />}
+                    disabled={segments.length === 0}
+                    onClick={() => { close(); void doCopy(); }}
+                  >
+                    Copiar transcripción
                   </MenuItem>
-                  <MenuItem disabled={processing || segments.length === 0} onClick={() => { close(); void maybeGenerateTitle(session.id, true); }}>
-                    <span className="flex items-center gap-2"><IconSparkle width={13} height={13} /> Generar título con IA</span>
+                  <MenuItem icon={<IconDownload width={14} height={14} />} onClick={() => { close(); void doExport("md"); }}>
+                    Exportar Markdown
+                  </MenuItem>
+                  <MenuItem icon={<IconFileText width={14} height={14} />} onClick={() => { close(); void doExport("txt"); }}>
+                    Exportar texto
+                  </MenuItem>
+                  <MenuItem icon={<IconBraces width={14} height={14} />} onClick={() => { close(); void doExport("json"); }}>
+                    Exportar JSON
+                  </MenuItem>
+                  <MenuItem
+                    icon={<IconRefresh width={14} height={14} />}
+                    disabled={processing}
+                    onClick={() => { close(); setRetrans(true); }}
+                  >
+                    {untranscribed ? "Transcribir grabación…" : "Retranscribir con…"}
+                  </MenuItem>
+                  <MenuItem
+                    icon={<IconSparkle width={14} height={14} />}
+                    disabled={processing || segments.length === 0}
+                    onClick={() => { close(); void maybeGenerateTitle(session.id, true); }}
+                  >
+                    Generar título con IA
                   </MenuItem>
                   {paths?.dir && (
-                    <MenuItem onClick={() => { close(); void openPath(paths.dir); }}>
-                      <span className="flex items-center gap-2"><IconFolder width={13} height={13} /> Abrir carpeta de audio</span>
+                    <MenuItem icon={<IconFolder width={14} height={14} />} onClick={() => { close(); void openPath(paths.dir); }}>
+                      Abrir carpeta de audio
                     </MenuItem>
                   )}
-                  <MenuItem danger disabled={processing} onClick={() => { close(); void deleteSessionFully(session.id); }}>
-                    <span className="flex items-center gap-2"><IconTrash width={13} height={13} /> Eliminar sesión</span>
+                  <MenuItem
+                    danger
+                    icon={<IconTrash width={14} height={14} />}
+                    disabled={processing}
+                    onClick={() => { close(); void deleteSessionFully(session.id); }}
+                  >
+                    Eliminar sesión
                   </MenuItem>
                 </>
               )}
@@ -253,7 +326,11 @@ export function SessionView() {
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 pl-10 text-[11px] text-fg-muted">
             <span>{fmtDate(session.createdAt)}</span>
             <span>{fmtDuration(session.durationMs ?? paths?.durationMs ?? null)}</span>
-            <span>{session.engine === "whisper" ? "Whisper local" : "Deepgram"}{session.engineModel ? ` · ${session.engineModel}` : ""}</span>
+            <span>
+              {session.engine === "none"
+                ? "Solo audio"
+                : `${session.engine === "whisper" ? "Whisper local" : "Deepgram"}${session.engineModel ? ` · ${session.engineModel}` : ""}`}
+            </span>
             <span>{segments.length} fragmentos</span>
             {session.language && session.language !== "auto" && <span>{session.language}</span>}
             {session.sourceFilePath && (
@@ -263,7 +340,7 @@ export function SessionView() {
         </header>
 
         {processing && progress && progress.phase !== "done" && (
-          <div className="mx-4 mt-3 rounded-xl bg-surface p-3 ring-1 ring-line/10">
+          <div className="mx-3 mt-2 rounded-xl bg-surface p-2.5 ring-1 ring-line/10">
             <div className="mb-1.5 flex items-center justify-between text-xs">
               <span className="text-fg">
                 {progress.phase === "decoding" && "Decodificando audio…"}
@@ -284,7 +361,7 @@ export function SessionView() {
         )}
 
         {audioSrc && (
-          <div className="mx-4 mt-3 flex items-center gap-3 rounded-xl bg-surface px-3 py-2 ring-1 ring-line/10">
+          <div className="mx-3 mt-2 flex items-center gap-3 rounded-xl bg-surface px-2 py-1 ring-1 ring-line/10">
             <audio
               ref={audioRef}
               controls
@@ -292,7 +369,7 @@ export function SessionView() {
               src={convertFileSrc(audioSrc)}
               onTimeUpdate={(e) => setActiveMs(e.currentTarget.currentTime * 1000)}
               onEnded={() => setActiveMs(null)}
-              className="h-9 w-full"
+              className="h-8 w-full"
             />
             {activeMs != null && <span className="font-mono text-[11px] tabular-nums text-fg-muted">{fmtMs(activeMs)}</span>}
           </div>
@@ -306,23 +383,30 @@ export function SessionView() {
             onSeek={audioSrc ? seek : undefined}
             onSpeakerClick={(key, label) => setSpeakerEdit({ key, label })}
             autoScroll={processing}
-            emptyHint={processing ? "Esperando los primeros fragmentos…" : "Esta sesión no tiene transcripción."}
+            emptyHint={
+              processing
+                ? "Esperando los primeros fragmentos…"
+                : untranscribed
+                  ? "Grabación sin transcribir. Pulsa «Transcribir» para generarla con el motor que elijas."
+                  : "Esta sesión no tiene transcripción."
+            }
           />
         </div>
 
-        <div className="border-t border-line/10 px-4 py-2">
+        <div className="border-t border-line/10 px-3 py-1.5">
           <textarea
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             onBlur={() => void saveNotes()}
-            rows={2}
+            rows={1}
             placeholder="Notas propias de la sesión (se guardan al salir del campo)…"
             className={cn("w-full resize-none rounded-lg bg-surface-2 px-2.5 py-1.5 text-xs text-fg ring-1 ring-line/10 placeholder:text-fg-muted/60 focus:outline-none focus:ring-indigo-500/50")}
           />
         </div>
       </div>
 
-      <aside className="w-[360px] shrink-0 border-l border-line/10">
+      {chatOpen && (
+      <aside className="w-80 shrink-0 border-l border-line/10">
         <ChatPanel
           sessionId={session.id}
           segments={segments}
@@ -332,14 +416,16 @@ export function SessionView() {
           live={processing}
         />
       </aside>
+      )}
 
       {retrans && (
-        <RetranscribeModal
+        <TranscribeModal
           onClose={() => setRetrans(false)}
           sessionId={session.id}
-          engine0={session.engine}
+          engine0={session.engine === "none" ? defaultEngine : session.engine}
           model0={session.engineModel}
           language0={session.language ?? "auto"}
+          first={untranscribed}
         />
       )}
       {speakerEdit && (

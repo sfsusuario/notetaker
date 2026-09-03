@@ -27,6 +27,11 @@ export interface SettingsValues {
   autoTitle: boolean;
   /** panel de chat abierto en la vista en vivo */
   liveChatOpen: boolean;
+  /** panel de chat abierto en el detalle de sesión */
+  sessionChatOpen: boolean;
+  /** último tamaño/posición de la ventana (píxeles físicos) */
+  windowBounds: { x: number; y: number; w: number; h: number } | null;
+  windowMaximized: boolean;
 }
 
 interface SettingsState extends SettingsValues {
@@ -49,7 +54,10 @@ const DEFAULTS: SettingsValues = {
   theme: "dark",
   exportFormat: "md",
   autoTitle: true,
-  liveChatOpen: true,
+  liveChatOpen: false,
+  sessionChatOpen: false,
+  windowBounds: null,
+  windowMaximized: false,
 };
 
 export const useSettingsStore = create<SettingsState>()(

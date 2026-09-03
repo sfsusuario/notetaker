@@ -5,7 +5,7 @@ import { IconDownload, IconFolder, IconTrash } from "../../../components/common/
 import {
   Badge,
   Button,
-  Card,
+  Collapsible,
   Dropdown,
   Field,
   Input,
@@ -154,7 +154,11 @@ function LlmSection() {
   };
 
   return (
-    <Card title="Proveedor de IA (chat y títulos)">
+    <Collapsible
+      title="Proveedor de IA"
+      summary={`${PROVIDER_LABELS[llm.provider]} · ${llm.model}`}
+      defaultOpen={false}
+    >
       <div className="flex flex-wrap gap-1">
         {(Object.keys(PROVIDER_LABELS) as LlmProviderId[]).map((id) => (
           <button
@@ -181,7 +185,7 @@ function LlmSection() {
         <Button size="sm" onClick={() => void test()}>Probar conexión</Button>
         {status && <span className="text-[11px] text-fg-muted">{status}</span>}
       </div>
-    </Card>
+    </Collapsible>
   );
 }
 
@@ -217,8 +221,15 @@ function WhisperSection() {
 
   const serverDl = downloads["server"];
   return (
-    <Card
-      title="Whisper local (whisper.cpp)"
+    <Collapsible
+      title="Whisper local"
+      summary={
+        whisper
+          ? whisper.serverInstalled
+            ? `Servidor instalado · modelos: ${whisper.models.filter((m) => m.installed).map((m) => m.id).join(", ") || "ninguno"} · por defecto ${settings.whisperModel}`
+            : "Servidor no instalado"
+          : "…"
+      }
       action={
         whisper?.running ? (
           <span className="flex items-center gap-2 text-[11px] text-emerald-500">
@@ -312,7 +323,7 @@ function WhisperSection() {
           {" · "}También puedes instalar con <code>scripts\setup-whisper.ps1</code>.
         </p>
       )}
-    </Card>
+    </Collapsible>
   );
 }
 
@@ -330,12 +341,16 @@ export function SettingsView() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-3xl space-y-4 px-6 py-6">
-        <h1 className="text-lg font-semibold text-fg">Ajustes</h1>
+      <div className="mx-auto max-w-2xl space-y-2.5 px-5 py-4">
+        <h1 className="text-base font-semibold text-fg">Ajustes</h1>
+        <p className="-mt-1 text-[11px] text-fg-muted">Despliega la sección que quieras configurar.</p>
 
         <LlmSection />
 
-        <Card title="Transcripción">
+        <Collapsible
+          title="Transcripción"
+          summary={`${settings.defaultEngine === "whisper" ? "Whisper local" : "Deepgram"} · ${settings.defaultSources.length === 2 ? "mic + sistema" : settings.defaultSources[0] === "mic" ? "micrófono" : "sistema"} · ${LANGUAGES.find(([v]) => v === settings.language)?.[1] ?? settings.language}`}
+        >
           <KeyField name="deepgram" label="Deepgram API key (nova-3, streaming y archivos)" />
           <Field label="Motor por defecto">
             <Dropdown
@@ -360,11 +375,14 @@ export function SettingsView() {
           <Field label="Título automático con IA" hint="Genera un título a los ~90 s de reunión o al terminar un archivo. Nunca pisa un título editado a mano.">
             <Toggle checked={settings.autoTitle} onChange={(v) => settings.set({ autoTitle: v })} />
           </Field>
-        </Card>
+        </Collapsible>
 
         <WhisperSection />
 
-        <Card title="Detección de reuniones">
+        <Collapsible
+          title="Detección de reuniones"
+          summary={settings.meetingDetection ? `Activada · ${[settings.meetingApps.teams && "Teams", settings.meetingApps.zoom && "Zoom", settings.meetingApps.meet && "Meet"].filter(Boolean).join(", ") || "ninguna app"}` : "Desactivada"}
+        >
           <Field label="Detectar reuniones en curso" hint="Muestra un aviso con inicio rápido cuando Teams, Zoom o Google Meet están en una llamada. Nunca graba sin tu confirmación.">
             <Toggle checked={settings.meetingDetection} onChange={(v) => setDetection({ meetingDetection: v })} />
           </Field>
@@ -391,9 +409,12 @@ export function SettingsView() {
               </label>
             ))}
           </div>
-        </Card>
+        </Collapsible>
 
-        <Card title="General">
+        <Collapsible
+          title="General"
+          summary={`Tema ${settings.theme === "dark" ? "oscuro" : settings.theme === "light" ? "claro" : "sistema"} · exportar ${settings.exportFormat}${settings.startMinimized ? " · inicia en bandeja" : ""}`}
+        >
           <Field label="Iniciar minimizado en la bandeja">
             <Toggle checked={settings.startMinimized} onChange={(v) => settings.set({ startMinimized: v })} />
           </Field>
@@ -421,7 +442,7 @@ export function SettingsView() {
           <p className="text-[10px] text-fg-muted">
             Las API keys se guardan en el Administrador de credenciales de Windows; las grabaciones y modelos en la carpeta de datos local; la base de datos SQLite en la carpeta de configuración de la app.
           </p>
-        </Card>
+        </Collapsible>
       </div>
     </div>
   );
