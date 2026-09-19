@@ -1,5 +1,5 @@
 //! Comandos de la sesión en vivo: start / stop / pause / resume / status.
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -81,6 +81,9 @@ pub async fn session_start_live(
     let mut handles = Vec::new();
     let mut started = Vec::new();
     let mut labels: Vec<(Source, String)> = Vec::new();
+    // Inicializado a "ahora" (no a 0): con 0 el vigilante vería una eternidad
+    // de silencio y cortaría en el primer sondeo.
+    let last_voice = Arc::new(AtomicU64::new(now_ms()));
     for source in cfg.sources.iter().copied() {
         let device_id = match source {
             Source::Mic => cfg.mic_device_id.clone(),
@@ -101,6 +104,7 @@ pub async fn session_start_live(
             device_id,
             wav_path,
             Arc::new(AtomicBool::new(false)),
+            last_voice.clone(),
         ) {
             Ok((h, s)) => {
                 labels.push((source, s.device_label.clone()));
@@ -118,6 +122,9 @@ pub async fn session_start_live(
     }
 
     let started_at = now_ms();
+    // Reunión en curso al arrancar (si la hay); si aparece más tarde, el
+    // vigilante la adjunta sobre la marcha.
+    let current_meeting = state.meeting.lock().unwrap().current.clone();
     *state.live.lock().unwrap() = Some(LiveSession {
         session_id: cfg.session_id.clone(),
         engine: cfg.engine,
@@ -125,6 +132,10 @@ pub async fn session_start_live(
         audio_dir: audio_dir.clone(),
         started_at,
         device_labels: labels,
+        meeting_key: current_meeting.as_ref().map(|m| m.key.clone()),
+        meeting_app: current_meeting.as_ref().map(|m| m.app.clone()),
+        meeting_since: started_at,
+        last_voice_at: last_voice,
     });
     Ok(StartResult {
         session_id: cfg.session_id,
@@ -137,6 +148,10 @@ pub async fn session_start_live(
 /// Detiene la sesión: para la captura (el pipeline cierra el WAV y el motor
 /// drena sus últimos resultados), mezcla los WAV y emite `session://stopped`.
 pub async fn stop_live(app: &AppHandle, state: &Arc<AppState>, reason: &str) -> Option<StopResult> {
+    // Antes de tomar la sesión: cubre de un golpe la parada manual durante la
+    // cuenta atrás, «Salir» de la bandeja, la sesión reemplazada y el propio
+    // disparo automático (que puede tardar ~50 s en completarse).
+    crate::autostop::clear_pending(app, state, "stopped");
     let session = state.live.lock().unwrap().take()?;
     let session_id = session.session_id.clone();
     let audio_dir = session.audio_dir.clone();

@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type {
   AudioMetrics,
+  AutoStopPending,
   ConnectionState,
   LiveConfig,
   Segment,
@@ -21,6 +22,8 @@ interface SessionState {
   stopping: boolean;
   error: string | null;
   titleRequested: boolean;
+  /** Propuesta de parada automática con cuenta atrás (null = ninguna) */
+  autoStop: AutoStopPending | null;
   start: (sessionId: string, config: LiveConfig, startedAt: number) => void;
   addFinal: (seg: Segment) => void;
   setPartial: (seg: Segment) => void;
@@ -30,6 +33,7 @@ interface SessionState {
   setStopping: (stopping: boolean) => void;
   setError: (error: string | null) => void;
   markTitleRequested: () => void;
+  setAutoStop: (p: AutoStopPending | null) => void;
   reset: () => void;
 }
 
@@ -45,6 +49,7 @@ const EMPTY = {
   stopping: false,
   error: null,
   titleRequested: false,
+  autoStop: null,
 };
 
 /** Inserta/reemplaza por id y mantiene el orden por receivedAt (luego startMs). */
@@ -89,6 +94,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   setStopping: (stopping) => set({ stopping }),
   setError: (error) => set({ error }),
   markTitleRequested: () => set({ titleRequested: true }),
+  setAutoStop: (autoStop) => set({ autoStop }),
   reset: () => set({ ...EMPTY }),
 }));
 

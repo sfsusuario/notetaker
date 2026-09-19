@@ -15,6 +15,8 @@ pub struct CaptureHandle {
     pub sample_rate: u32,
     pub device_label: String,
     pub dropped_frames: Arc<AtomicU64>,
+    /// Aviso si el dispositivo guardado no existía y se usó el predeterminado.
+    pub fallback_note: Option<String>,
 }
 
 impl CaptureHandle {
@@ -29,11 +31,13 @@ impl Drop for CaptureHandle {
     }
 }
 
+/// Dispositivo elegido y, si el guardado en ajustes ya no existe, el aviso
+/// que explica por qué se usó otro.
 fn find_device(
     host: &cpal::Host,
     source: &str,
     device_id: &Option<String>,
-) -> Result<cpal::Device, String> {
+) -> Result<(cpal::Device, Option<String>), String> {
     fn by_name(
         devices: impl Iterator<Item = cpal::Device>,
         name: &str,
@@ -41,23 +45,43 @@ fn find_device(
         let mut devices = devices;
         devices.find(|d| d.name().map(|n| n == name).unwrap_or(false))
     }
+    // Un dispositivo guardado puede desaparecer (auricular Bluetooth que
+    // cambia de perfil o se desconecta). Antes eso impedía grabar; ahora se
+    // recurre al predeterminado y se avisa.
+    let fallback = |dev: Option<cpal::Device>, missing: &str, what: &str| {
+        dev.map(|d| {
+            let label = d.name().unwrap_or_else(|_| "predeterminado".into());
+            (
+                d,
+                Some(format!(
+                    "{what} «{missing}» no está disponible; se usó «{label}» en su lugar."
+                )),
+            )
+        })
+    };
     match (source, device_id) {
         // Loopback WASAPI: stream de entrada sobre un dispositivo de SALIDA
         ("system", Some(id)) => host
             .output_devices()
             .ok()
             .and_then(|d| by_name(d, id))
-            .ok_or_else(|| format!("Dispositivo de salida no encontrado: {id}")),
+            .map(|d| (d, None))
+            .or_else(|| fallback(host.default_output_device(), id, "La salida"))
+            .ok_or_else(|| "Sin dispositivo de salida por defecto".to_string()),
         ("system", None) => host
             .default_output_device()
+            .map(|d| (d, None))
             .ok_or_else(|| "Sin dispositivo de salida por defecto".to_string()),
         ("mic", Some(id)) => host
             .input_devices()
             .ok()
             .and_then(|d| by_name(d, id))
-            .ok_or_else(|| format!("Micrófono no encontrado: {id}")),
+            .map(|d| (d, None))
+            .or_else(|| fallback(host.default_input_device(), id, "El micrófono"))
+            .ok_or_else(|| "Sin micrófono por defecto".to_string()),
         ("mic", None) => host
             .default_input_device()
+            .map(|d| (d, None))
             .ok_or_else(|| "Sin micrófono por defecto".to_string()),
         (other, _) => Err(format!("Fuente desconocida: {other}")),
     }
@@ -73,7 +97,9 @@ pub fn start(
 ) -> Result<CaptureHandle, String> {
     let stop = Arc::new(AtomicBool::new(false));
     let dropped = Arc::new(AtomicU64::new(0));
-    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(u32, String), String>>();
+    #[allow(clippy::type_complexity)]
+    let (ready_tx, ready_rx) =
+        std::sync::mpsc::channel::<Result<(u32, String, Option<String>), String>>();
 
     let stop_thread = stop.clone();
     let dropped_thread = dropped.clone();
@@ -82,7 +108,7 @@ pub fn start(
         .name("audio-capture".into())
         .spawn(move || {
             let host = cpal::default_host();
-            let device = match find_device(&host, &source, &device_id) {
+            let (device, fallback_note) = match find_device(&host, &source, &device_id) {
                 Ok(d) => d,
                 Err(e) => {
                     let _ = ready_tx.send(Err(e));
@@ -170,7 +196,7 @@ pub fn start(
                 let _ = ready_tx.send(Err(format!("No se pudo iniciar el stream: {e}")));
                 return;
             }
-            let _ = ready_tx.send(Ok((sample_rate, label)));
+            let _ = ready_tx.send(Ok((sample_rate, label, fallback_note)));
 
             while !stop_thread.load(Ordering::SeqCst) {
                 std::thread::sleep(Duration::from_millis(50));
@@ -179,7 +205,7 @@ pub fn start(
         })
         .map_err(|e| format!("No se pudo crear el hilo de audio: {e}"))?;
 
-    let (sample_rate, device_label) = ready_rx
+    let (sample_rate, device_label, fallback_note) = ready_rx
         .recv_timeout(Duration::from_secs(5))
         .map_err(|_| "Timeout inicializando la captura de audio".to_string())??;
 
@@ -188,5 +214,6 @@ pub fn start(
         sample_rate,
         device_label,
         dropped_frames: dropped,
+        fallback_note,
     })
 }

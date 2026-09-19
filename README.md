@@ -10,6 +10,7 @@ Aplicación de escritorio (Windows) para **transcribir reuniones en tiempo real 
 - **Hablantes**: con mic + sistema por separado siempre distingues *Yo* de *Otros*; Deepgram además separa *Hablante 1, 2…*. El selector de motor muestra si detecta hablantes.
 - **Historial** con título automático (IA) editable, búsqueda por contenido, reproductor sincronizado con las burbujas, renombrado de hablantes, exportación (md/txt/json) y retranscripción con otro motor.
 - **Chat con IA** por sesión (Gemini por defecto; también OpenAI, Anthropic, DeepSeek, Kimi u Ollama local). La lista de modelos se obtiene de la API oficial de cada proveedor.
+- **Parada automática**: si te olvidas de detener, la app lo propone con una cuenta atrás cancelable cuando termina la reunión detectada, cuando lleva 10 minutos sin oír nada o al alcanzar la duración máxima (4 h). Configurable en Ajustes → *Detener automáticamente*.
 - **Detección de reuniones** (Teams, Zoom, Google Meet): un popup superior con ajustes rápidos pregunta si quieres transcribir. Icono en la bandeja; cerrar la ventana la oculta.
 
 ## Desarrollo
@@ -21,7 +22,8 @@ Requisitos: Node 22+, Rust (cargo), Visual Studio 2022 Build Tools (C++), Window
 .\run.ps1 -Release     # compila y lanza el binario de producción
 .\run.ps1 -Clean       # build desde cero
 .\start.ps1            # lanza el binario ya compilado (sin recompilar)
-.\scripts\build-installer.ps1 -Open   # instalador NSIS/MSI
+.\build.ps1                           # .exe final + instaladores NSIS/MSI
+.\build.ps1 -NoBundle -Run            # solo el .exe (más rápido) y lo lanza
 .\scripts\setup-whisper.ps1 -Model base   # instala whisper.cpp + modelo (también desde Ajustes)
 .\scripts\clean.ps1 [-Data]           # limpia builds (y datos, con confirmación)
 ```

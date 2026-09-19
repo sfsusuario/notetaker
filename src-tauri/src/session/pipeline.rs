@@ -5,7 +5,7 @@
 //! La línea de tiempo (`position_ms`) avanza solo con audio escrito al WAV,
 //! así los timestamps de los segmentos coinciden con la grabación.
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use serde::Serialize;
@@ -18,7 +18,16 @@ use crate::audio::resample::Resampler;
 use crate::audio::wav::WavSink;
 use crate::audio::{CHUNK_SAMPLES, TARGET_RATE};
 use crate::state::{AppState, SourceHandles};
-use crate::stt::{emit_error, AudioChunk, Engine, Source, SttSpec};
+use crate::stt::{emit_error, now_ms, AudioChunk, Engine, Source, SttSpec};
+
+/// Umbral de "hay alguien hablando" para la parada automática (≈ −40 dBFS).
+/// Deliberadamente más alto que el del VAD (0.003): aquel está elegido para no
+/// cortar voz, y el ruido de sala vive en 0.001–0.005, así que con ese umbral
+/// el silencio no saltaría nunca. La voz normal está en 0.02–0.15.
+const AUTOSTOP_VOICE_RMS: f32 = 0.010;
+/// Chunks de 100 ms seguidos por encima del umbral para contar como voz: un
+/// teclazo o un clic no deben reiniciar la cuenta de silencio.
+const VOICE_RUN_CHUNKS: u32 = 3;
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -48,6 +57,9 @@ pub fn spawn_source_stream(
     device_id: Option<String>,
     wav_path: PathBuf,
     paused: Arc<AtomicBool>,
+    // `last_voice` lo comparten todas las fuentes de la sesión: basta con que
+    // UNA oiga voz para que la sesión no se considere en silencio.
+    last_voice: Arc<AtomicU64>,
 ) -> Result<(SourceHandles, StartedSource), String> {
     let (frame_tx, mut frame_rx) = mpsc::channel::<AudioFrame>(64);
     let (err_tx, mut err_rx) = mpsc::channel::<String>(8);
@@ -63,6 +75,11 @@ pub fn spawn_source_stream(
     let sample_rate = capture_handle.sample_rate;
     let device_label = capture_handle.device_label.clone();
     let dropped = capture_handle.dropped_frames.clone();
+
+    // El dispositivo guardado había desaparecido: avisar sin bloquear la grabación.
+    if let Some(note) = &capture_handle.fallback_note {
+        let _ = app.emit("audio://warning", serde_json::json!({ "message": note }));
+    }
 
     let wav = WavSink::open(&wav_path)?;
 
@@ -91,6 +108,7 @@ pub fn spawn_source_stream(
             let mut rs = Resampler::new(sample_rate, TARGET_RATE);
             let mut buf: Vec<i16> = Vec::with_capacity(CHUNK_SAMPLES * 4);
             let mut position_ms: u64 = 0;
+            let mut voice_run: u32 = 0;
             loop {
                 tokio::select! {
                     _ = stop_rx.changed() => {
@@ -107,6 +125,15 @@ pub fn spawn_source_stream(
                             let chunk: Vec<i16> = buf.drain(..CHUNK_SAMPLES).collect();
                             wav.write(&chunk);
                             let (rms, peak) = rms_peak(&chunk);
+                            // Marca de actividad para la parada por silencio.
+                            if rms >= AUTOSTOP_VOICE_RMS {
+                                voice_run += 1;
+                            } else {
+                                voice_run = 0;
+                            }
+                            if voice_run >= VOICE_RUN_CHUNKS {
+                                last_voice.store(now_ms(), Ordering::Relaxed);
+                            }
                             let _ = app.emit(
                                 "audio://metrics",
                                 MetricsPayload {

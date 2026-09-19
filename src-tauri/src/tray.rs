@@ -52,16 +52,10 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                     .and_then(|t| t.detection.lock().ok().and_then(|g| g.as_ref().and_then(|i| i.is_checked().ok())))
                     .unwrap_or(true);
                 if let Some(state) = app.try_state::<Arc<AppState>>() {
-                    let mut m = state.meeting.lock().unwrap();
-                    m.enabled = enabled;
-                    if !enabled {
-                        m.current = None;
-                    }
+                    // Misma ruta que el comando de Ajustes: además de apagar la
+                    // detección, desvincula la reunión de la sesión viva.
+                    crate::meeting::set_detection_enabled(app, state.inner(), enabled);
                 }
-                if !enabled {
-                    crate::meeting::hide_popup(app);
-                }
-                let _ = app.emit_to("main", "meeting://detection-changed", enabled);
             }
             "quit" => {
                 let app = app.clone();

@@ -1,4 +1,5 @@
 mod audio;
+mod autostop;
 mod files;
 mod meeting;
 mod paths;
@@ -110,6 +111,10 @@ pub fn run() {
             stt::whisper::install::whisper_status,
             stt::whisper::install::whisper_delete_model,
             stt::whisper::install::whisper_stop_server,
+            autostop::autostop_set,
+            autostop::autostop_pending,
+            autostop::autostop_cancel,
+            autostop::autostop_stop_now,
             meeting::meeting_detection_set,
             meeting::meeting_current,
             meeting::meeting_snooze,

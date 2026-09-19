@@ -182,6 +182,30 @@ export interface MeetingApps {
   meet: boolean;
 }
 
+// ── Parada automática ───────────────────────────────────────────────────────
+
+/** Lo que viaja a Rust: siempre en segundos (la UI trabaja en min/horas). */
+export interface AutoStopSettingsIpc {
+  onMeetingEnd: boolean;
+  onSilence: boolean;
+  /** 0 = desactivado */
+  silenceSec: number;
+  /** 0 = desactivado */
+  maxSec: number;
+  graceSec: number;
+}
+
+export type AutoStopReason = "meeting-end" | "silence" | "max-duration";
+
+export interface AutoStopPending {
+  sessionId: string;
+  reason: AutoStopReason;
+  /** epoch ms absoluto: la UI pinta `deadlineMs - Date.now()` */
+  deadlineMs: number;
+  graceSec: number;
+  detail: string;
+}
+
 // ── Configuraciones de arranque ─────────────────────────────────────────────
 
 export interface LiveConfig {

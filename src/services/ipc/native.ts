@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AudioMetrics,
+  AutoStopPending,
+  AutoStopSettingsIpc,
   DeviceInfo,
   DownloadProgress,
   EngineInfo,
@@ -66,6 +68,14 @@ export const meetingSnooze = (key?: string) =>
 export const popupAction = (action: "start" | "ignore" | "hide", config?: unknown) =>
   invoke<void>("popup_action", { action, config: config ?? null });
 
+export const autostopSet = (settings: AutoStopSettingsIpc) =>
+  invoke<void>("autostop_set", { settings });
+export const autostopPending = () => invoke<AutoStopPending | null>("autostop_pending");
+/** «Seguir grabando»: retira la propuesta y evita que vuelva enseguida. */
+export const autostopCancel = () => invoke<void>("autostop_cancel");
+/** «Detener ahora»: para la sesión como parada manual. */
+export const autostopStopNow = () => invoke<void>("autostop_stop_now");
+
 export type SecretName =
   | "deepgram"
   | "anthropic"
@@ -117,6 +127,8 @@ export const onMeetingStartRequest = on<{
   meeting: MeetingInfo | null;
 }>("meeting://start-request");
 export const onTrayNewSession = on<void>("tray://new-session");
+export const onAutostopProposed = on<AutoStopPending>("autostop://proposed");
+export const onAutostopCancelled = on<{ cause: string }>("autostop://cancelled");
 export const onWhisperDownloadProgress = on<DownloadProgress>(
   "whisper://download-progress",
 );

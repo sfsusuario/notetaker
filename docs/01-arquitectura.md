@@ -52,6 +52,16 @@ SQLite (plugin-sql): `sessions`, `segments (session_id, source, speaker, text, s
 
 Etiquetas de hablante (`app/speakers.ts`): `mic` → **Yo**; `system` con `speaker` → **Hablante N** (o el nombre que le pongas); `system` sin speaker → **Otros**; `file` → **Transcripción** o Hablante N.
 
+## Parada automática
+
+El mismo hilo del sondeo (3 s) hace de vigilante (`meeting::autostop_tick`), también con la detección de reuniones apagada. Tres disparadores, evaluados en `meeting::decide` (función pura, con pruebas en `meeting::tests`):
+
+1. **Fin de reunión**: la sesión guarda `meeting_key`/`meeting_app` (al arrancar o adjuntada después si la llamada empieza más tarde). Se exige un margen de 60 s desde que se adjunta y un debounce de **20 sondeos en Teams** (su detección depende del micrófono: silenciarse la hace desaparecer) y 5 en Zoom/Meet. Mismo app con pid distinto = continuación, no final.
+2. **Silencio**: el pipeline marca `last_voice_at` cuando el rms supera `AUTOSTOP_VOICE_RMS` (0.010, ≈ −40 dBFS) durante 300 ms seguidos. Se congela en pausa y **no cuenta dentro de una reunión en curso** (escuchar sin hablar es legítimo).
+3. **Duración máxima**: tiempo de pared, pausas incluidas.
+
+Al disparar se guarda un `PendingStop` con `deadline_ms` absoluto, se emite `autostop://proposed` y se muestra el popup; al vencer, `stop_live(.., "auto-…")`. «Seguir grabando» (`autostop_cancel`) desvincula la reunión, reinicia el contador de silencio o prorroga el tope según el motivo, y suprime nuevas propuestas 60 s. Si entre dos sondeos pasan más de 30 s se asume suspensión del equipo: se reinicia todo en vez de cortar al despertar.
+
 ## Detección de reuniones
 
 `meeting/detector.rs`: Teams = proceso `ms-teams.exe` **y** micrófono en uso por Teams; Zoom = `zoom.exe` **y** (ventana "Zoom Meeting" o micrófono en uso); Meet = título de ventana con código `xxx-xxxx-xxx`. El registro `HKCU\...\CapabilityAccessManager\ConsentStore\microphone\{NonPackaged\*|*}` con `LastUsedTimeStop == 0` indica captura activa. Transiciones → `meeting://detected` / `meeting://ended`; el popup envía `popup_action("start", config)` y `main` recibe `meeting://start-request`.

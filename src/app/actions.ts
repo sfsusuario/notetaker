@@ -5,6 +5,9 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { confirmDialog } from "../components/common/ConfirmDialog";
 import {
+  autostopCancel,
+  autostopPending,
+  autostopSet,
   fileSize,
   meetingDetectionSet,
   recordingPaths,
@@ -55,6 +58,11 @@ export async function bootstrap(): Promise<void> {
     .addEventListener("change", () => applyTheme(useSettingsStore.getState().theme));
 
   await syncDetectionToBackend();
+  await syncAutoStopToBackend();
+  // Una propuesta pendiente sobrevive a una recarga del WebView.
+  void autostopPending()
+    .then((p) => p && useSessionStore.getState().setAutoStop(p))
+    .catch(() => {});
   void useEnginesStore.getState().refresh();
   // Sesiones que quedaron "grabando" por un cierre abrupto: se cierran antes
   // de pintar el historial para que no aparezcan como activas para siempre.
@@ -74,6 +82,17 @@ export async function bootstrap(): Promise<void> {
   await restoreWindowState();
   void watchWindowState();
 
+  if (import.meta.env.DEV) {
+    // Handle de depuración: permite probar la parada automática con segundos
+    // en vez de esperar 10 minutos reales. Solo en desarrollo.
+    (window as unknown as Record<string, unknown>).__nt = {
+      autostopSet,
+      autostopPending,
+      autostopCancel,
+      syncAutoStopToBackend,
+    };
+  }
+
   const w = getCurrentWindow();
   if (settings.startMinimized) {
     await w.hide();
@@ -89,6 +108,22 @@ export async function syncDetectionToBackend(): Promise<void> {
     await meetingDetectionSet({ enabled: s.meetingDetection, apps: s.meetingApps });
   } catch (e) {
     console.error("meetingDetectionSet", e);
+  }
+}
+
+/** Empuja los ajustes de parada automática a Rust (en segundos). */
+export async function syncAutoStopToBackend(): Promise<void> {
+  const s = useSettingsStore.getState();
+  try {
+    await autostopSet({
+      onMeetingEnd: s.autoStopOnMeetingEnd,
+      onSilence: s.autoStopOnSilence,
+      silenceSec: s.autoStopOnSilence ? Math.round(s.autoStopSilenceMin * 60) : 0,
+      maxSec: Math.round(s.autoStopMaxHours * 3600),
+      graceSec: s.autoStopGraceSec,
+    });
+  } catch (e) {
+    console.error("autostopSet", e);
   }
 }
 

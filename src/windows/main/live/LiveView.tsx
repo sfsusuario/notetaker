@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { pauseLive, resumeLive, stopLive } from "../../../app/actions";
 import { fmtMs } from "../../../app/format";
+import { AutoStopBanner } from "../../../components/common/AutoStopBanner";
 import { ChatPanel } from "../../../components/chat/ChatPanel";
 import {
   IconHeadphones,
@@ -139,6 +140,8 @@ export function LiveView() {
             )}
           </div>
         </header>
+
+        {s.autoStop && <AutoStopBanner pending={s.autoStop} className="mx-3 mt-2" />}
 
         {s.error && (
           <div className="mx-3 mt-2 rounded-lg bg-rose-500/10 px-3 py-1 text-xs text-rose-400 ring-1 ring-rose-500/30">

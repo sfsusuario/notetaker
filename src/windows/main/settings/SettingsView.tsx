@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { syncDetectionToBackend } from "../../../app/actions";
+import { syncAutoStopToBackend, syncDetectionToBackend } from "../../../app/actions";
 import { fmtBytes } from "../../../app/format";
 import { IconDownload, IconFolder, IconTrash } from "../../../components/common/icons";
 import {
@@ -339,6 +339,19 @@ export function SettingsView() {
     void syncDetectionToBackend();
   };
 
+  const setAutoStop = (patch: Parameters<typeof settings.set>[0]) => {
+    settings.set(patch);
+    void syncAutoStopToBackend();
+  };
+
+  const autoStopSummary = [
+    settings.autoStopOnMeetingEnd && "fin de reunión",
+    settings.autoStopOnSilence && `${settings.autoStopSilenceMin} min sin audio`,
+    settings.autoStopMaxHours > 0 && `${settings.autoStopMaxHours} h máximo`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-2xl space-y-2.5 px-5 py-4">
@@ -378,6 +391,70 @@ export function SettingsView() {
         </Collapsible>
 
         <WhisperSection />
+
+        <Collapsible
+          title="Detener automáticamente"
+          summary={autoStopSummary || "Desactivado"}
+        >
+          <p className="pb-1 text-[11px] text-fg-muted">
+            Antes de detener aparece un aviso con cuenta atrás y la opción de seguir grabando.
+          </p>
+          <Field
+            label="Cuando termina la reunión detectada"
+            hint={
+              settings.meetingDetection
+                ? "Usa el detector de Teams, Zoom y Meet. Espera a confirmar que la llamada acabó de verdad."
+                : "Requiere la detección de reuniones activada (sección siguiente)."
+            }
+          >
+            <Toggle
+              checked={settings.autoStopOnMeetingEnd}
+              disabled={!settings.meetingDetection}
+              onChange={(v) => setAutoStop({ autoStopOnMeetingEnd: v })}
+            />
+          </Field>
+          <Field label="Cuando no se oye nada" hint="Red de seguridad para reuniones presenciales o apps no detectadas. No cuenta mientras la sesión está en pausa ni durante una reunión en curso.">
+            <div className="flex items-center gap-2">
+              {settings.autoStopOnSilence && (
+                <Dropdown
+                  value={String(settings.autoStopSilenceMin)}
+                  options={[1, 5, 10, 20, 30].map((m) => ({
+                    value: String(m),
+                    label: `${m} min`,
+                  }))}
+                  onSelect={(v) => setAutoStop({ autoStopSilenceMin: Number(v) })}
+                  className="w-24"
+                />
+              )}
+              <Toggle
+                checked={settings.autoStopOnSilence}
+                onChange={(v) => setAutoStop({ autoStopOnSilence: v })}
+              />
+            </div>
+          </Field>
+          <Field label="Duración máxima" hint="Tope duro por si fallan las demás señales. Cuenta el tiempo total, pausas incluidas.">
+            <Dropdown
+              value={String(settings.autoStopMaxHours)}
+              options={[
+                { value: "0", label: "Sin límite" },
+                ...[1, 2, 3, 4, 6, 8].map((h) => ({ value: String(h), label: `${h} h` })),
+              ]}
+              onSelect={(v) => setAutoStop({ autoStopMaxHours: Number(v) })}
+              className="w-32"
+            />
+          </Field>
+          <Field label="Tiempo para cancelar" hint="Cuánto espera el aviso antes de detener si no respondes.">
+            <Dropdown
+              value={String(settings.autoStopGraceSec)}
+              options={[10, 30, 60, 120].map((s) => ({
+                value: String(s),
+                label: s >= 60 ? `${s / 60} min` : `${s} s`,
+              }))}
+              onSelect={(v) => setAutoStop({ autoStopGraceSec: Number(v) })}
+              className="w-32"
+            />
+          </Field>
+        </Collapsible>
 
         <Collapsible
           title="Detección de reuniones"

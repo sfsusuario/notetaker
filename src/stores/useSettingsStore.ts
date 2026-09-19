@@ -21,6 +21,15 @@ export interface SettingsValues {
   language: string;
   meetingDetection: boolean;
   meetingApps: MeetingApps;
+  /** Detener al terminar la reunión detectada */
+  autoStopOnMeetingEnd: boolean;
+  /** Detener tras un rato sin oír nada */
+  autoStopOnSilence: boolean;
+  autoStopSilenceMin: number;
+  /** Tope duro en horas; 0 = desactivado */
+  autoStopMaxHours: number;
+  /** Segundos de cortesía antes de detener (cuenta atrás cancelable) */
+  autoStopGraceSec: number;
   startMinimized: boolean;
   theme: Theme;
   exportFormat: ExportFormat;
@@ -50,6 +59,15 @@ const DEFAULTS: SettingsValues = {
   language: "auto",
   meetingDetection: true,
   meetingApps: { teams: true, zoom: true, meet: true },
+  autoStopOnMeetingEnd: true,
+  autoStopOnSilence: true,
+  autoStopSilenceMin: 10,
+  // Más que cualquier reunión real, pero corta la grabación olvidada toda la
+  // noche, que es la que llena el disco (~115 MB/h por pista).
+  autoStopMaxHours: 4,
+  // 60 s: el caso es «me levanté de la mesa»; con 15–30 s no da tiempo a
+  // volver y con 2 min se desperdicia grabación de silencio.
+  autoStopGraceSec: 60,
   startMinimized: false,
   theme: "dark",
   exportFormat: "md",

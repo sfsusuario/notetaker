@@ -1,9 +1,15 @@
 import { useEffect, useState } from "react";
-import { IconRecord, IconX } from "../../components/common/icons";
+import { useCountdown } from "../../components/common/AutoStopBanner";
+import { IconClock, IconRecord, IconStop, IconX } from "../../components/common/icons";
 import { Badge, Button, Dropdown, cn } from "../../components/common/ui";
 import {
+  autostopCancel,
+  autostopPending,
+  autostopStopNow,
   enginesList,
   meetingCurrent,
+  onAutostopCancelled,
+  onAutostopProposed,
   onMeetingDetected,
   onMeetingEnded,
   popupAction,
@@ -12,11 +18,53 @@ import { applyTheme, useSettingsStore } from "../../stores/useSettingsStore";
 import {
   LANGUAGES,
   type AudioSource,
+  type AutoStopPending,
   type EngineId,
   type EngineInfo,
   type MeetingInfo,
   type QuickStartConfig,
 } from "../../types";
+
+/** El popup se usa para dos avisos distintos; nunca coinciden: el de reunión
+ *  solo aparece sin sesión viva y el de parada solo con sesión viva. */
+function AutoStopPrompt({ pending }: { pending: AutoStopPending }) {
+  const left = useCountdown(pending.deadlineMs);
+  return (
+    <div className="flex h-full flex-col bg-surface text-fg ring-1 ring-line/15">
+      <div data-tauri-drag-region className="flex items-center gap-2 px-3 py-2">
+        <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-amber-500 text-white">
+          <IconClock width={13} height={13} />
+        </span>
+        <div data-tauri-drag-region className="min-w-0 flex-1">
+          <div data-tauri-drag-region className="text-xs font-semibold">
+            ¿Sigues grabando?
+          </div>
+          <div data-tauri-drag-region className="truncate text-[10px] text-fg-muted">
+            {pending.detail}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex flex-1 flex-col items-center justify-center gap-1">
+        <span className="font-mono text-4xl tabular-nums text-amber-500">
+          {left > 0 ? `${left}s` : "…"}
+        </span>
+        <span className="text-[11px] text-fg-muted">
+          {left > 0 ? "hasta detener la grabación" : "deteniendo…"}
+        </span>
+      </div>
+
+      <div className="flex items-center justify-end gap-1.5 px-3 py-2.5">
+        <Button size="sm" onClick={() => void autostopCancel()}>
+          Seguir grabando
+        </Button>
+        <Button size="sm" variant="danger" onClick={() => void autostopStopNow()}>
+          <IconStop width={13} height={13} /> Detener ahora
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 const APP_COLORS: Record<MeetingInfo["app"], string> = {
   teams: "bg-violet-600",
@@ -33,6 +81,7 @@ export function PopupWindow() {
   const [model, setModel] = useState<string | null>(null);
   const [sources, setSources] = useState<AudioSource[]>(settings.defaultSources);
   const [language, setLanguage] = useState(settings.language);
+  const [autoStop, setAutoStop] = useState<AutoStopPending | null>(null);
 
   // localStorage es compartido con la ventana principal pero no reactivo:
   // se rehidrata cada vez que aparece una reunión.
@@ -63,6 +112,8 @@ export function PopupWindow() {
     void (async () => {
       await rehydrate();
       setMeeting(await meetingCurrent().catch(() => null));
+      // Si el WebView del popup aún no estaba cargado, el evento se perdió.
+      setAutoStop(await autostopPending().catch(() => null));
       unl.push(
         await onMeetingDetected((m) => {
           setMeeting(m);
@@ -70,6 +121,17 @@ export function PopupWindow() {
         }),
       );
       unl.push(await onMeetingEnded(() => setMeeting(null)));
+      unl.push(
+        await onAutostopProposed((p) => {
+          // El tema puede haber cambiado desde que se cargó este WebView.
+          void (async () => {
+            await useSettingsStore.persist.rehydrate();
+            applyTheme(useSettingsStore.getState().theme);
+          })();
+          setAutoStop(p);
+        }),
+      );
+      unl.push(await onAutostopCancelled(() => setAutoStop(null)));
     })();
     return () => unl.forEach((u) => u());
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -101,6 +163,10 @@ export function PopupWindow() {
   };
 
   const srcId = sources.includes("mic") && sources.includes("system") ? "both" : sources[0] ?? "both";
+
+  // La parada automática tiene prioridad: solo ocurre con una sesión viva,
+  // momento en el que el aviso de reunión detectada no se muestra.
+  if (autoStop) return <AutoStopPrompt pending={autoStop} />;
 
   return (
     <div className="flex h-full flex-col bg-surface text-fg ring-1 ring-line/15">
