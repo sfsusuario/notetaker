@@ -5,7 +5,14 @@ import type { Segment, SpeakerOverride } from "../../types";
 /** Límite aproximado de caracteres de transcripción enviados al modelo. */
 export const TRANSCRIPT_CHAR_LIMIT = 60_000;
 
-/** "[mm:ss] Yo: …" una línea por segmento, fusionando consecutivos del mismo hablante. */
+/**
+ * Línea nueva al menos cada ~45 s aunque siga el mismo hablante: con una sola
+ * línea por turno, un archivo transcrito con whisper (sin hablantes) quedaba
+ * entero bajo "[00:00]" y el modelo se inventaba los minutos que citaba.
+ */
+const MAX_LINE_MS = 45_000;
+
+/** "[mm:ss] Yo: …" fusionando segmentos consecutivos del mismo hablante (hasta ~45 s por línea). */
 export function formatTranscript(
   segments: Segment[],
   speakers: SpeakerOverride[] = [],
@@ -22,7 +29,7 @@ export function formatTranscript(
   };
   for (const seg of segments) {
     const label = speakerLabel(seg, speakers);
-    if (label !== lastLabel) {
+    if (label !== lastLabel || seg.startMs - bufStart >= MAX_LINE_MS) {
       flush();
       lastLabel = label;
       bufStart = seg.startMs;

@@ -130,6 +130,12 @@ impl UtteranceCutter {
         None
     }
 
+    /// Frase en curso (aún sin cerrar): inicio en la línea de tiempo y audio
+    /// acumulado. Sirve para mostrar texto provisional mientras se habla.
+    pub fn pending(&self) -> Option<(u64, &[i16])> {
+        (self.in_speech && !self.buf.is_empty()).then_some((self.buf_start_ms, self.buf.as_slice()))
+    }
+
     /// Cierra la frase en curso (fin de stream).
     pub fn flush(&mut self) -> Option<Utterance> {
         if !self.in_speech {

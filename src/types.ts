@@ -150,7 +150,48 @@ export interface WhisperStatus {
   modelsDir: string;
   releaseTag: string;
   models: WhisperModelStatus[];
-  running: { model: string; port: number } | null;
+  /** backend: "CPU" o "GPU · <dispositivo>" */
+  running: { model: string; port: number; backend: string; threads: number } | null;
+  /** Backend Vulkan opcional: none | stale (otra versión) | ready */
+  gpuBackend: "none" | "stale" | "ready";
+  gpuDir: string;
+}
+
+export interface DiarizeStatus {
+  installed: boolean;
+  /** También puede etiquetar en vivo (librería en C instalada) */
+  live: boolean;
+  dir: string;
+  version: string;
+}
+
+/** Turno de un hablante (ms en la pista analizada); speaker 0, 1… por orden de aparición. */
+export interface SpeakerTurn {
+  startMs: number;
+  endMs: number;
+  speaker: number;
+}
+
+/** Dónde corre whisper. auto = GPU si el backend Vulkan está instalado. */
+export type WhisperAccel = "auto" | "gpu" | "cpu";
+
+export interface SystemProfile {
+  cpu: string;
+  physicalCores: number;
+  logicalCores: number;
+  performanceCores: number | null;
+  efficiencyCores: number | null;
+  ramTotalGb: number;
+  ramAvailableGb: number;
+  gpus: { name: string; dedicatedMb: number; sharedMb: number }[];
+  onBattery: boolean | null;
+  gpuBackend: "none" | "stale" | "ready";
+  recommended: {
+    accel: "gpu" | "cpu";
+    threads: number;
+    model: string;
+    notes: string[];
+  };
 }
 
 export interface DownloadProgress {
@@ -167,6 +208,8 @@ export interface WhisperServerEvent {
   model: string;
   port: number | null;
   message: string | null;
+  /** Solo en "ready": "CPU" o "GPU · <dispositivo>" */
+  backend?: string | null;
 }
 
 export interface MeetingInfo {
@@ -218,6 +261,11 @@ export interface LiveConfig {
   systemDeviceId?: string | null;
   language?: string;
   whisperThreads?: number;
+  whisperAccel?: WhisperAccel;
+  /** Texto provisional de "Otros" mientras se habla (whisper) */
+  whisperPartials?: boolean;
+  /** Hablantes provisionales en "Otros" mientras dura la sesión */
+  diarizeLive?: boolean;
 }
 
 export interface FileConfig {
@@ -229,6 +277,7 @@ export interface FileConfig {
   source?: SegmentSource;
   copyAudio?: boolean;
   whisperThreads?: number;
+  whisperAccel?: WhisperAccel;
 }
 
 /** Ajustes rápidos que el popup envía a la ventana principal. */
@@ -277,6 +326,7 @@ export type LlmProviderId =
 
 export interface ProviderConfig {
   provider: LlmProviderId;
+  /** En Ollama, "auto" = el mejor modelo instalado en cada momento. */
   model: string;
   /** Solo Ollama: URL base local (p. ej. http://localhost:11434) */
   baseUrl?: string;

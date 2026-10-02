@@ -78,6 +78,25 @@ export function TranscriptFeed({
     .join(",")}`;
   const ref = useAutoScroll<HTMLDivElement>(autoScroll ? dep : null);
 
+  // Cabecera nueva al cambiar de hablante o tras 1 min de audio en el mismo
+  // grupo. Se mide en tiempo de audio (startMs), no de llegada: un archivo
+  // llega entero en segundos y quedaba en un solo grupo con una sola hora.
+  const groupStarts = useMemo(() => {
+    const starts: boolean[] = [];
+    let groupMs = 0;
+    segments.forEach((seg, i) => {
+      const prev = segments[i - 1];
+      const fresh =
+        !prev ||
+        speakerKey(prev) !== speakerKey(seg) ||
+        seg.startMs < prev.startMs ||
+        seg.startMs - groupMs >= 60_000;
+      if (fresh) groupMs = seg.startMs;
+      starts.push(fresh);
+    });
+    return starts;
+  }, [segments]);
+
   const activeId = useMemo(() => {
     if (activeMs == null) return null;
     let best: Segment | null = null;
@@ -96,12 +115,10 @@ export function TranscriptFeed({
       )}
       <div className="mx-auto flex max-w-3xl flex-col gap-1">
         {segments.map((seg, i) => {
-          const prev = segments[i - 1];
           const me = isMe(seg);
           const key = speakerKey(seg);
           const label = speakerLabel(seg, speakers);
-          const sameAsPrev =
-            prev && speakerKey(prev) === key && seg.receivedAt - prev.receivedAt < 60_000;
+          const sameAsPrev = !groupStarts[i];
           const active = seg.id === activeId;
           return (
             <div
@@ -129,22 +146,26 @@ export function TranscriptFeed({
                     >
                       {label}
                     </button>
-                    <span className="text-fg-muted/60">{fmtMs(seg.startMs)}</span>
                   </div>
                 )}
-                <div
-                  onClick={onSeek ? () => onSeek(seg.startMs) : undefined}
-                  title={onSeek ? `Ir a ${fmtMs(seg.startMs)}` : fmtMs(seg.startMs)}
-                  className={cn(
-                    "rounded-2xl px-3 py-1.5 text-[13px] leading-relaxed ring-1 transition-colors",
-                    me
-                      ? "rounded-br-md bg-indigo-600 text-white ring-indigo-500/30"
-                      : "rounded-bl-md bg-surface text-fg ring-line/10",
-                    onSeek && "cursor-pointer hover:ring-indigo-400/60",
-                    active && "ring-2 ring-amber-400/80",
-                  )}
-                >
-                  {seg.text}
+                <div className={cn("flex items-end gap-1.5", me && "flex-row-reverse")}>
+                  <div
+                    onClick={onSeek ? () => onSeek(seg.startMs) : undefined}
+                    title={onSeek ? `Ir a ${fmtMs(seg.startMs)}` : undefined}
+                    className={cn(
+                      "rounded-2xl px-3 py-1.5 text-[13px] leading-relaxed ring-1 transition-colors",
+                      me
+                        ? "rounded-br-md bg-indigo-600 text-white ring-indigo-500/30"
+                        : "rounded-bl-md bg-surface text-fg ring-line/10",
+                      onSeek && "cursor-pointer hover:ring-indigo-400/60",
+                      active && "ring-2 ring-amber-400/80",
+                    )}
+                  >
+                    {seg.text}
+                  </div>
+                  <span className="shrink-0 select-none pb-1 text-[10px] tabular-nums text-fg-muted/60">
+                    {fmtMs(seg.startMs)}
+                  </span>
                 </div>
               </div>
             </div>

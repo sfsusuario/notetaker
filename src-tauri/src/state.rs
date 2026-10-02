@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, Mutex};
@@ -156,9 +156,15 @@ pub struct AppState {
     pub whisper: tokio::sync::Mutex<Option<WhisperServer>>,
     /// Serializa las peticiones /inference (el server las atiende de una en una).
     pub whisper_infer: tokio::sync::Mutex<()>,
+    /// Serializa los análisis de hablantes (cada uno ocupa 4 núcleos).
+    pub diarize: tokio::sync::Mutex<()>,
+    /// Extractor de huellas de voz para hablantes en vivo (se carga una vez).
+    pub speaker_embedder: Mutex<Option<crate::speaker::SharedEmbedder>>,
     pub http: reqwest::Client,
     pub meeting: Mutex<MeetingState>,
     pub autostop: Mutex<AutoStopState>,
+    /// Chats de Ollama en curso (id de petición → señal de cancelación).
+    pub ollama_cancel: Mutex<HashMap<String, watch::Sender<bool>>>,
 }
 
 impl Default for AppState {
@@ -168,12 +174,15 @@ impl Default for AppState {
             file_cancel: Mutex::new(None),
             whisper: tokio::sync::Mutex::new(None),
             whisper_infer: tokio::sync::Mutex::new(()),
+            diarize: tokio::sync::Mutex::new(()),
+            speaker_embedder: Mutex::new(None),
             http: reqwest::Client::builder()
                 .user_agent("notetaker/0.1")
                 .build()
                 .expect("reqwest client"),
             meeting: Mutex::new(MeetingState::default()),
             autostop: Mutex::new(AutoStopState::default()),
+            ollama_cancel: Mutex::new(HashMap::new()),
         }
     }
 }

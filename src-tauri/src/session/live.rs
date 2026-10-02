@@ -24,6 +24,13 @@ pub struct LiveConfig {
     pub system_device_id: Option<String>,
     pub language: Option<String>,
     pub whisper_threads: Option<u32>,
+    /// auto | gpu | cpu (solo whisper)
+    #[serde(default)]
+    pub whisper_accel: crate::stt::whisper::server::Accel,
+    /// Texto provisional de "Otros" mientras se habla (más fluido, más GPU).
+    pub whisper_partials: Option<bool>,
+    /// Hablantes provisionales en "Otros" (whisper + identificación instalada).
+    pub diarize_live: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -71,7 +78,14 @@ pub async fn session_start_live(
     }
     let threads = cfg.whisper_threads.unwrap_or(4);
     let engine = match cfg.engine {
-        Some(id) => Some(Engine::build(&app, &state, id, cfg.model.clone(), threads).await?),
+        Some(id) => {
+            let mut engine = Engine::build(&app, &state, id, cfg.model.clone(), threads, cfg.whisper_accel).await?;
+            if let Engine::Whisper { partials, speakers, .. } = &mut engine {
+                *partials = cfg.whisper_partials.unwrap_or(true);
+                *speakers = cfg.diarize_live.unwrap_or(true);
+            }
+            Some(engine)
+        }
         None => None,
     };
     let audio_dir = paths::session_audio_dir(&app, &cfg.session_id)?;

@@ -285,6 +285,32 @@ export async function insertSegment(seg: Segment): Promise<void> {
   );
 }
 
+/** Fija el hablante de muchos segmentos: un UPDATE por hablante (no por fila). */
+export async function setSegmentSpeakers(
+  sessionId: string,
+  updates: Array<{ id: string; speaker: string | null }>,
+): Promise<void> {
+  const d = await getDb();
+  const bySpeaker = new Map<string | null, string[]>();
+  for (const u of updates) bySpeaker.set(u.speaker, [...(bySpeaker.get(u.speaker) ?? []), u.id]);
+  for (const [speaker, ids] of bySpeaker) {
+    for (let i = 0; i < ids.length; i += 500) {
+      const chunk = ids.slice(i, i + 500);
+      const marks = chunk.map((_, j) => `$${j + 3}`).join(", ");
+      await d.execute(`UPDATE segments SET speaker = $1 WHERE session_id = $2 AND id IN (${marks})`, [
+        speaker,
+        sessionId,
+        ...chunk,
+      ]);
+    }
+  }
+}
+
+export async function deleteSegment(id: string): Promise<void> {
+  const d = await getDb();
+  await d.execute("DELETE FROM segments WHERE id = $1", [id]);
+}
+
 export async function deleteSegments(sessionId: string): Promise<void> {
   const d = await getDb();
   await d.execute("DELETE FROM segments WHERE session_id = $1", [sessionId]);

@@ -226,7 +226,16 @@ pub fn engines_list(app: AppHandle) -> Vec<EngineInfo> {
             }],
         },
         EngineInfo {
-            caps: capabilities(EngineId::Whisper),
+            caps: {
+                // Con la identificación local instalada, whisper también separa
+                // hablantes (al terminar, no en tiempo real).
+                let mut caps = capabilities(EngineId::Whisper);
+                if crate::diarize::status(&app).installed {
+                    caps.diarization = true;
+                    caps.description.push_str(" Identifica a los hablantes al terminar.");
+                }
+                caps
+            },
             ready: whisper_ready,
             readiness: whisper_readiness,
             models: whisper_models,
@@ -247,7 +256,9 @@ pub struct SttSpec {
 #[derive(Clone)]
 pub enum Engine {
     Deepgram { api_key: String },
-    Whisper { model: String },
+    /// En vivo: `partials` = texto provisional de la frase en curso;
+    /// `speakers` = hablantes provisionales en "Otros".
+    Whisper { model: String, partials: bool, speakers: bool },
 }
 
 impl Engine {
@@ -258,6 +269,7 @@ impl Engine {
         id: EngineId,
         model: Option<String>,
         threads: u32,
+        accel: whisper::server::Accel,
     ) -> Result<Engine, String> {
         match id {
             EngineId::Deepgram => Ok(Engine::Deepgram {
@@ -265,8 +277,8 @@ impl Engine {
             }),
             EngineId::Whisper => {
                 let model = model.unwrap_or_else(|| "base".into());
-                whisper::server::ensure_running(app, state, &model, threads).await?;
-                Ok(Engine::Whisper { model })
+                whisper::server::ensure_running(app, state, &model, threads, accel).await?;
+                Ok(Engine::Whisper { model, partials: true, speakers: true })
             }
         }
     }
@@ -284,8 +296,8 @@ impl Engine {
             Engine::Deepgram { api_key } => {
                 deepgram_live::run(app, api_key, spec, rx, stop_rx).await;
             }
-            Engine::Whisper { model } => {
-                whisper::live::run(app, state, model, spec, rx, stop_rx).await;
+            Engine::Whisper { model, partials, speakers } => {
+                whisper::live::run(app, state, model, partials, speakers, spec, rx, stop_rx).await;
             }
         }
     }
@@ -303,7 +315,7 @@ impl Engine {
             Engine::Deepgram { api_key } => {
                 deepgram_file::transcribe(app, state, api_key.clone(), spec, pcm, cancel).await
             }
-            Engine::Whisper { model } => {
+            Engine::Whisper { model, .. } => {
                 whisper::file::transcribe(app, state, model.clone(), spec, pcm, cancel).await
             }
         }

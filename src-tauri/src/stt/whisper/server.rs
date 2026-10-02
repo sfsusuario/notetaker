@@ -1,28 +1,60 @@
 //! Ciclo de vida de `whisper-server.exe`: un proceso por app, arrancado en el
 //! primer uso y reutilizado (cargar el modelo tarda segundos). Se mata al
-//! salir de la app y al cambiar de modelo.
+//! salir de la app y al cambiar de modelo, hilos o aceleración.
 use std::io::{BufRead, BufReader};
 use std::net::TcpStream;
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
 use super::install;
 use crate::state::AppState;
+
+/// Dónde corre la inferencia. `Auto` = GPU si el backend Vulkan está instalado.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Accel {
+    #[default]
+    Auto,
+    Gpu,
+    Cpu,
+}
 
 pub struct WhisperServer {
     child: Child,
     pub port: u16,
     pub model: String,
     pub threads: u32,
+    pub accel: Accel,
+    /// Arrancado con el modelo VAD (`-vm`): las peticiones pueden pedir `vad`.
+    pub vad: bool,
+    /// Dispositivo que reporta el propio servidor al cargar (lo rellena el
+    /// hilo que drena stderr).
+    backend: Arc<Mutex<BackendInfo>>,
+}
+
+#[derive(Default)]
+struct BackendInfo {
+    gpu_name: Option<String>,
+    using_gpu: bool,
 }
 
 impl WhisperServer {
     pub fn alive(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(None))
+    }
+
+    pub fn backend_label(&self) -> String {
+        let b = self.backend.lock().unwrap();
+        match (&b.gpu_name, b.using_gpu) {
+            (Some(name), true) => format!("GPU · {name}"),
+            (None, true) => "GPU".into(),
+            _ => "CPU".into(),
+        }
     }
 
     pub fn kill(&mut self) {
@@ -45,9 +77,21 @@ struct ServerEvent {
     model: String,
     port: Option<u16>,
     message: Option<String>,
+    backend: Option<String>,
 }
 
 fn emit(app: &AppHandle, status: &'static str, model: &str, port: Option<u16>, message: Option<String>) {
+    emit_full(app, status, model, port, message, None);
+}
+
+fn emit_full(
+    app: &AppHandle,
+    status: &'static str,
+    model: &str,
+    port: Option<u16>,
+    message: Option<String>,
+    backend: Option<String>,
+) {
     let _ = app.emit(
         "whisper://server",
         ServerEvent {
@@ -55,8 +99,39 @@ fn emit(app: &AppHandle, status: &'static str, model: &str, port: Option<u16>, m
             model: model.to_string(),
             port,
             message,
+            backend,
         },
     );
+}
+
+/// Hilos lógicos del equipo: pedir más a ggml solo añade esperas entre hilos
+/// (con 20 hilos en 8 núcleos la inferencia es más lenta, no más rápida).
+pub fn max_threads() -> u32 {
+    std::thread::available_parallelism()
+        .map(|n| n.get() as u32)
+        .unwrap_or(8)
+}
+
+/// "ggml_vulkan: 0 = Intel(R) Arc(TM) 140V GPU (16GB) (Intel Corporation) | uma: 1 | …"
+/// → "Intel Arc 140V GPU (16GB)".
+fn parse_vulkan_device(line: &str) -> Option<String> {
+    let rest = line.split("ggml_vulkan: 0 = ").nth(1)?;
+    let mut name = rest.split(" | ").next()?.trim().to_string();
+    // Quita el fabricante final "(Intel Corporation)"
+    if name.ends_with(')') {
+        if let Some(i) = name.rfind(" (") {
+            name.truncate(i);
+        }
+    }
+    Some(name.replace("(R)", "").replace("(TM)", "").split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
+fn track_backend(line: &str, info: &Mutex<BackendInfo>) {
+    if let Some(name) = parse_vulkan_device(line) {
+        info.lock().unwrap().gpu_name = Some(name);
+    } else if line.contains("whisper_backend_init_gpu: using") {
+        info.lock().unwrap().using_gpu = true;
+    }
 }
 
 /// Asocia el proceso hijo a un "job object" con KILL_ON_JOB_CLOSE: si la app
@@ -64,7 +139,7 @@ fn emit(app: &AppHandle, status: &'static str, model: &str, port: Option<u16>, m
 /// desarrollo), Windows mata también a whisper-server en vez de dejarlo
 /// corriendo con el modelo cargado en memoria.
 #[cfg(windows)]
-fn attach_kill_on_close(child: &Child) {
+pub(crate) fn attach_kill_on_close(child: &Child) {
     use std::os::windows::io::AsRawHandle;
     use std::sync::OnceLock;
     use windows::Win32::Foundation::HANDLE;
@@ -109,7 +184,7 @@ fn attach_kill_on_close(child: &Child) {
 }
 
 #[cfg(not(windows))]
-fn attach_kill_on_close(_child: &Child) {}
+pub(crate) fn attach_kill_on_close(_child: &Child) {}
 
 /// Mata servidores whisper de arranques anteriores que quedaran huérfanos.
 /// Solo toca binarios dentro de la carpeta de datos de la app.
@@ -140,12 +215,12 @@ pub fn free_port() -> u16 {
         .unwrap_or(8178)
 }
 
-/// Puerto del server en marcha (si lo hay).
-pub async fn current_port(state: &AppState) -> Option<u16> {
+/// Puerto del server en marcha (si lo hay) y si tiene VAD.
+pub async fn current(state: &AppState) -> Option<(u16, bool)> {
     let mut guard = state.whisper.lock().await;
     let s = guard.as_mut()?;
     if s.alive() {
-        Some(s.port)
+        Some((s.port, s.vad))
     } else {
         *guard = None;
         None
@@ -158,10 +233,15 @@ pub async fn ensure_running(
     state: &Arc<AppState>,
     model: &str,
     threads: u32,
+    accel: Accel,
 ) -> Result<u16, String> {
+    let threads = threads.clamp(1, max_threads());
+    // Si el modelo VAD llega después (se descarga en segundo plano), el
+    // servidor se reinicia una vez para usarlo.
+    let vad = install::vad_model(app);
     let mut guard = state.whisper.lock().await;
     if let Some(s) = guard.as_mut() {
-        if s.model == model && s.threads == threads && s.alive() {
+        if s.model == model && s.threads == threads && s.accel == accel && s.vad == vad.is_some() && s.alive() {
             return Ok(s.port);
         }
         s.kill();
@@ -179,12 +259,68 @@ pub async fn ensure_running(
         ));
     }
     let bin = install::bin_dir(app)?;
-    let port = free_port();
-    let threads = threads.clamp(1, 32);
+    let gpu = match accel {
+        Accel::Cpu => None,
+        Accel::Auto | Accel::Gpu => install::gpu_backend_path(app),
+    };
+    let mut notice = None;
+    if accel == Accel::Gpu && gpu.is_none() {
+        notice = Some("La aceleración GPU no está instalada para este servidor; se usa la CPU.".to_string());
+    }
 
+    let launched = match launch(app, &exe, &bin, &model_path, model, threads, gpu.as_deref(), vad.as_deref()).await {
+        Ok(l) => Ok(l),
+        // Un driver de GPU que falla al inicializar no debe dejar al usuario
+        // sin transcripción: se reintenta en CPU.
+        Err(e) if gpu.is_some() => {
+            eprintln!("[whisper] el arranque con GPU falló ({e}); reintentando en CPU");
+            notice = Some("La GPU falló al arrancar el motor; se usa la CPU.".into());
+            launch(app, &exe, &bin, &model_path, model, threads, None, vad.as_deref()).await
+        }
+        Err(e) => Err(e),
+    };
+    let (child, port, backend) = match launched {
+        Ok(l) => l,
+        Err(msg) => {
+            emit(app, "error", model, None, Some(msg.clone()));
+            return Err(msg);
+        }
+    };
+
+    let server = WhisperServer {
+        child,
+        port,
+        model: model.to_string(),
+        threads,
+        accel,
+        vad: vad.is_some(),
+        backend,
+    };
+    let backend_label = server.backend_label();
+    *guard = Some(server);
+    // Tras soltar el lock: la UI pide whisper_status al recibir "ready".
+    drop(guard);
+    emit_full(app, "ready", model, Some(port), notice, Some(backend_label));
+    Ok(port)
+}
+
+type Launched = (Child, u16, Arc<Mutex<BackendInfo>>);
+
+/// Lanza el proceso y espera a que acepte conexiones.
+async fn launch(
+    app: &AppHandle,
+    exe: &Path,
+    bin: &Path,
+    model_path: &Path,
+    model: &str,
+    threads: u32,
+    gpu_dll: Option<&Path>,
+    vad_model: Option<&Path>,
+) -> Result<Launched, String> {
+    let port = free_port();
     emit(app, "starting", model, Some(port), None);
 
-    let mut cmd = Command::new(&exe);
+    let mut cmd = Command::new(exe);
     cmd.args([
         "--host",
         "127.0.0.1",
@@ -195,10 +331,27 @@ pub async fn ensure_running(
         "-t",
         &threads.to_string(),
     ])
-    .current_dir(&bin)
+    .current_dir(bin)
     .stdin(Stdio::null())
     .stdout(Stdio::null())
     .stderr(Stdio::piped());
+    if let Some(vad) = vad_model {
+        cmd.arg("-vm").arg(vad);
+    }
+    match gpu_dll {
+        Some(dll) => {
+            cmd.env("GGML_BACKEND_PATH", dll)
+                // Las matrices cooperativas (coopmat) del driver Intel Arc dan
+                // resultados corruptos: con ellas small/turbo devolvieron
+                // texto inventado (WER 47–91 %, distinto en cada pasada); sin
+                // ellas, el mismo texto que en CPU (turbo 1.3 %) a 4x la
+                // velocidad. Medido con el driver 32.0.101.6326 (Arc 140V).
+                .env("GGML_VK_DISABLE_COOPMAT", "1");
+        }
+        None => {
+            cmd.env_remove("GGML_BACKEND_PATH").arg("-ng");
+        }
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -210,47 +363,43 @@ pub async fn ensure_running(
         .map_err(|e| format!("No se pudo lanzar whisper-server: {e}"))?;
     attach_kill_on_close(&child);
 
-    // Drenar stderr a la consola (si no, el pipe se llena y el proceso se bloquea)
+    // Drenar stderr a la consola (si no, el pipe se llena y el proceso se
+    // bloquea) y anotar qué dispositivo usa.
+    let backend = Arc::new(Mutex::new(BackendInfo::default()));
     if let Some(stderr) = child.stderr.take() {
+        let backend = backend.clone();
         std::thread::Builder::new()
             .name("whisper-stderr".into())
             .spawn(move || {
                 for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                    track_backend(&line, &backend);
                     eprintln!("[whisper-server] {line}");
                 }
             })
             .ok();
     }
 
-    // Espera a que escuche (carga del modelo: tiny/base ~2 s, medium >10 s)
+    // Espera a que escuche (carga del modelo: tiny/base ~2 s, medium >10 s;
+    // con GPU la primera vez se suman unos segundos de compilar shaders)
     let started = Instant::now();
     let deadline = Duration::from_secs(180);
     loop {
         if let Ok(Some(status)) = child.try_wait() {
-            let msg = format!("whisper-server terminó al arrancar (código {status}). Revisa que el modelo no esté corrupto.");
-            emit(app, "error", model, None, Some(msg.clone()));
-            return Err(msg);
+            return Err(format!(
+                "whisper-server terminó al arrancar (código {status}). Revisa que el modelo no esté corrupto."
+            ));
         }
         if TcpStream::connect_timeout(&format!("127.0.0.1:{port}").parse().unwrap(), Duration::from_millis(200)).is_ok() {
             break;
         }
         if started.elapsed() > deadline {
             let _ = child.kill();
-            let msg = "whisper-server no respondió a tiempo".to_string();
-            emit(app, "error", model, None, Some(msg.clone()));
-            return Err(msg);
+            let _ = child.wait();
+            return Err("whisper-server no respondió a tiempo".to_string());
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-
-    emit(app, "ready", model, Some(port), None);
-    *guard = Some(WhisperServer {
-        child,
-        port,
-        model: model.to_string(),
-        threads,
-    });
-    Ok(port)
+    Ok((child, port, backend))
 }
 
 pub async fn stop(state: &AppState) {
@@ -280,5 +429,26 @@ pub fn kill_sync(state: &AppState) {
                     .status();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_vulkan_device_name() {
+        let line = "ggml_vulkan: 0 = Intel(R) Arc(TM) 140V GPU (16GB) (Intel Corporation) | uma: 1 | fp16: 1 | bf16: 0";
+        assert_eq!(parse_vulkan_device(line).as_deref(), Some("Intel Arc 140V GPU (16GB)"));
+        assert_eq!(parse_vulkan_device("load_backend: loaded CPU backend"), None);
+    }
+
+    #[test]
+    fn backend_label_requires_gpu_in_use() {
+        let info = Mutex::new(BackendInfo::default());
+        track_backend("ggml_vulkan: 0 = Intel(R) Arc(TM) 140V GPU (16GB) (Intel Corporation) | uma: 1", &info);
+        assert!(!info.lock().unwrap().using_gpu, "detectar la GPU no implica usarla (-ng)");
+        track_backend("whisper_backend_init_gpu: using Vulkan0 backend", &info);
+        assert!(info.lock().unwrap().using_gpu);
     }
 }

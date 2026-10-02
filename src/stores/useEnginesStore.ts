@@ -1,6 +1,7 @@
 import { create } from "zustand";
-import { enginesList, whisperStatus } from "../services/ipc/native";
+import { diarizeStatus, enginesList, whisperStatus } from "../services/ipc/native";
 import type {
+  DiarizeStatus,
   DownloadProgress,
   EngineInfo,
   WhisperServerEvent,
@@ -10,6 +11,8 @@ import type {
 interface EnginesState {
   engines: EngineInfo[];
   whisper: WhisperStatus | null;
+  /** Identificación de hablantes local (sherpa-onnx) */
+  diarize: DiarizeStatus | null;
   downloads: Record<string, DownloadProgress>;
   server: WhisperServerEvent | null;
   loaded: boolean;
@@ -21,13 +24,14 @@ interface EnginesState {
 export const useEnginesStore = create<EnginesState>((set) => ({
   engines: [],
   whisper: null,
+  diarize: null,
   downloads: {},
   server: null,
   loaded: false,
   refresh: async () => {
     try {
-      const [engines, whisper] = await Promise.all([enginesList(), whisperStatus()]);
-      set({ engines, whisper, loaded: true });
+      const [engines, whisper, diarize] = await Promise.all([enginesList(), whisperStatus(), diarizeStatus()]);
+      set({ engines, whisper, diarize, loaded: true });
     } catch (e) {
       console.error("engines refresh", e);
     }

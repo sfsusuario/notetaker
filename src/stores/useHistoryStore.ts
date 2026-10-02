@@ -29,6 +29,8 @@ interface HistoryState {
   current: OpenSession | null;
   /** progreso de transcripción de archivo por sesión */
   progress: Record<string, ProgressEvent>;
+  /** sesiones con identificación de hablantes en curso */
+  diarizing: Record<string, boolean>;
   setQuery: (q: string) => void;
   setPage: (p: number) => void;
   load: () => Promise<void>;
@@ -40,6 +42,7 @@ interface HistoryState {
   appendSegment: (seg: Segment) => void;
   replaceSegments: (sessionId: string, segments: Segment[]) => void;
   setProgress: (p: ProgressEvent) => void;
+  setDiarizing: (sessionId: string, on: boolean) => void;
   setSpeakerLabel: (sessionId: string, key: string, label: string) => Promise<void>;
   patchSession: (id: string, patch: Partial<Session>) => void;
 }
@@ -52,6 +55,7 @@ export const useHistoryStore = create<HistoryState>((set, get) => ({
   total: 0,
   current: null,
   progress: {},
+  diarizing: {},
 
   setQuery: (query) => {
     // Al cambiar el filtro se vuelve a la primera página.
@@ -140,6 +144,9 @@ export const useHistoryStore = create<HistoryState>((set, get) => ({
 
   setProgress: (p) =>
     set((s) => ({ progress: { ...s.progress, [p.sessionId]: p } })),
+
+  setDiarizing: (sessionId, on) =>
+    set((s) => ({ diarizing: { ...s.diarizing, [sessionId]: on } })),
 
   setSpeakerLabel: async (sessionId, key, label) => {
     await db.upsertSpeaker(sessionId, key, label.trim());

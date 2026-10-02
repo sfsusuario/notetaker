@@ -29,6 +29,7 @@ import { useSettingsStore } from "../stores/useSettingsStore";
 import { useUiStore } from "../stores/useUiStore";
 import type { QuickStartConfig } from "../types";
 import { finalizeLiveSession, maybeGenerateTitle, startLive } from "./actions";
+import { ECHO_WINDOW_MS, isEcho } from "./echo";
 
 const TITLE_AFTER_MS = 90_000;
 const TITLE_AFTER_CHARS = 900;
@@ -55,6 +56,19 @@ export async function wireNativeEvents(): Promise<UnlistenFn[]> {
     await onSttFinal((seg) => {
       const live = useSessionStore.getState();
       if (live.sessionId === seg.sessionId) {
+        const recent = (source: string) =>
+          live.segments.filter(
+            (x) => x.source === source && Math.abs(seg.receivedAt - x.receivedAt) <= ECHO_WINDOW_MS,
+          );
+        // Eco de los altavoces: "Yo" repitiendo a "Otros" (llegue antes o después)
+        if (seg.source === "mic" && isEcho(seg.text, recent("system").map((x) => x.text))) return;
+        if (seg.source === "system") {
+          const echoes = recent("mic").filter((m) => isEcho(m.text, [seg.text]));
+          if (echoes.length > 0) {
+            live.removeSegments(echoes.map((m) => m.id));
+            for (const m of echoes) void db.deleteSegment(m.id);
+          }
+        }
         live.addFinal(seg);
         const s = useSessionStore.getState();
         if (!s.titleRequested && useSettingsStore.getState().autoTitle) {
@@ -167,7 +181,11 @@ export async function wireNativeEvents(): Promise<UnlistenFn[]> {
       useEnginesStore.getState().setServer(e);
       if (e.status === "error" && e.message) {
         useUiStore.getState().toast(e.message, "error");
+      } else if (e.status === "ready" && e.message) {
+        // p. ej. la GPU falló al arrancar y se usa la CPU
+        useUiStore.getState().toast(e.message, "info");
       }
+      if (e.status === "ready") void useEnginesStore.getState().refresh();
     }),
   );
 

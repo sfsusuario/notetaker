@@ -34,6 +34,7 @@ import type {
   SegmentSource,
   StopResult,
 } from "../types";
+import { maybeDiarize } from "./diarize";
 import { defaultTitle, newId } from "./format";
 import { restoreWindowState, watchWindowState } from "./windowState";
 
@@ -162,6 +163,9 @@ export async function startLive(opts: StartLiveOptions = {}): Promise<boolean> {
       opts.systemDeviceId !== undefined ? opts.systemDeviceId : s.systemDeviceId,
     language: opts.language ?? s.language,
     whisperThreads: s.whisperThreads,
+    whisperAccel: s.whisperAccel,
+    whisperPartials: s.whisperPartials,
+    diarizeLive: s.diarizeLive,
   };
   if (sources.length === 0) {
     toast("Elige al menos una fuente de audio.", "error");
@@ -208,7 +212,11 @@ export async function finalizeLiveSession(result: StopResult | null, sessionId: 
   live.reset();
   await useHistoryStore.getState().load();
   await openSession(sessionId);
-  if (segments.length > 0) void maybeGenerateTitle(sessionId);
+  if (segments.length > 0) {
+    void maybeGenerateTitle(sessionId);
+    // Deepgram ya separa hablantes; whisper no.
+    if (session?.engine === "whisper") maybeDiarize(sessionId);
+  }
 }
 
 export async function stopLive(): Promise<void> {
@@ -275,6 +283,7 @@ export async function startFromFile(
       source: "file",
       copyAudio: true,
       whisperThreads: s.whisperThreads,
+      whisperAccel: s.whisperAccel,
     });
     await db.updateSession(sessionId, {
       status: "done",
@@ -286,6 +295,7 @@ export async function startFromFile(
     await useHistoryStore.getState().refreshCurrent();
     toast("Transcripción completada", "ok");
     void maybeGenerateTitle(sessionId);
+    if (opts.engine === "whisper") maybeDiarize(sessionId);
   } catch (e) {
     const msg = errText(e);
     await db.updateSession(sessionId, { status: msg === "Cancelado" ? "done" : "error" });
@@ -361,6 +371,7 @@ export async function transcribeSession(
         source: j.source,
         copyAudio: false,
         whisperThreads: s.whisperThreads,
+        whisperAccel: s.whisperAccel,
       });
     } catch (e) {
       const msg = errText(e);
@@ -385,6 +396,7 @@ export async function transcribeSession(
       toast(existing.length > 0 ? "Retranscripción completada" : "Transcripción completada", "ok");
     }
     void maybeGenerateTitle(sessionId);
+    if (opts.engine === "whisper") maybeDiarize(sessionId);
   } else {
     await db.updateSession(sessionId, { status: "error" });
     toast(failures.join(" · ") || "No se obtuvo ninguna transcripción.", "error");

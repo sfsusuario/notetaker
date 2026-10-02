@@ -30,6 +30,10 @@ pub fn whisper_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(app_local_data(app)?.join("whisper"))
 }
 
+pub fn diarize_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app_local_data(app)?.join("diarize"))
+}
+
 pub fn ensure_dir(p: &std::path::Path) -> Result<(), String> {
     std::fs::create_dir_all(p).map_err(|e| format!("No se pudo crear {}: {e}", p.display()))
 }

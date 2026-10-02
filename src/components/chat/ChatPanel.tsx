@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useAutoScroll } from "../../hooks/useAutoScroll";
-import { askAboutSession, cancelChat } from "../../services/llm/chatClient";
+import { useLlmModelLabel } from "../../hooks/useLlmModelLabel";
+import { askAboutSession, cancelChat, warmupLlm } from "../../services/llm/chatClient";
 import { SUMMARY_PROMPT } from "../../services/llm/prompts";
 import { PROVIDER_LABELS } from "../../services/llm/providers";
 import { useChatStore } from "../../stores/useChatStore";
@@ -39,6 +40,7 @@ export function ChatPanel({ sessionId, segments, speakers, title, date, live, cl
   const load = useChatStore((s) => s.load);
   const clear = useChatStore((s) => s.clear);
   const llm = useSettingsStore((s) => s.llm);
+  const modelLabel = useLlmModelLabel();
   const navigate = useUiStore((s) => s.navigate);
   const [input, setInput] = useState("");
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -49,6 +51,12 @@ export function ChatPanel({ sessionId, segments, speakers, title, date, live, cl
   useEffect(() => {
     void load(sessionId);
   }, [sessionId, load]);
+
+  // Solo al abrir el chat o cambiar de modelo: con la transcripción de ese
+  // momento basta para elegir el contexto (luego solo crece).
+  useEffect(() => {
+    warmupLlm(segments, speakers);
+  }, [llm.provider, llm.model]);
 
   const send = (text: string) => {
     if (!text.trim() || busy) return;
@@ -85,7 +93,7 @@ export function ChatPanel({ sessionId, segments, speakers, title, date, live, cl
             className="max-w-[160px] truncate rounded-md px-1.5 py-0.5 text-[10px] text-fg-muted hover:bg-line/10 hover:text-fg"
             title="Cambiar proveedor/modelo en Ajustes"
           >
-            {PROVIDER_LABELS[llm.provider]} · {llm.model}
+            {PROVIDER_LABELS[llm.provider]} · {modelLabel}
           </button>
           {messages.length > 0 && (
             <IconButton title="Borrar conversación" onClick={() => void clear(sessionId)}>

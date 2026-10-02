@@ -6,6 +6,7 @@ import {
   maybeGenerateTitle,
   transcribeSession,
 } from "../../../app/actions";
+import { diarizeSession } from "../../../app/diarize";
 import { fmtDate, fmtDuration, fmtMs } from "../../../app/format";
 import { ChatPanel } from "../../../components/chat/ChatPanel";
 import {
@@ -20,6 +21,7 @@ import {
   IconRefresh,
   IconSparkle,
   IconTrash,
+  IconUsers,
 } from "../../../components/common/icons";
 import { useSettingsStore } from "../../../stores/useSettingsStore";
 import {
@@ -139,6 +141,7 @@ export function SessionView() {
   const toast = useUiStore((u) => u.toast);
   const current = useHistoryStore((h) => h.current);
   const progress = useHistoryStore((h) => (id ? h.progress[id] : undefined));
+  const diarizing = useHistoryStore((h) => (id ? !!h.diarizing[id] : false));
   const open = useHistoryStore((h) => h.open);
   const rename = useHistoryStore((h) => h.rename);
   const setSpeakerLabel = useHistoryStore((h) => h.setSpeakerLabel);
@@ -250,6 +253,11 @@ export function SessionView() {
                 <Spinner className="h-2.5 w-2.5" /> Procesando
               </Badge>
             )}
+            {diarizing && (
+              <Badge tone="info">
+                <Spinner className="h-2.5 w-2.5" /> Identificando hablantes…
+              </Badge>
+            )}
             {segments.length > 0 && (
               <IconButton title="Copiar transcripción (Markdown)" onClick={() => void doCopy()}>
                 <IconCopy width={15} height={15} />
@@ -305,6 +313,13 @@ export function SessionView() {
                     onClick={() => { close(); void maybeGenerateTitle(session.id, true); }}
                   >
                     Generar título con IA
+                  </MenuItem>
+                  <MenuItem
+                    icon={<IconUsers width={14} height={14} />}
+                    disabled={processing || diarizing || segments.length === 0}
+                    onClick={() => { close(); void diarizeSession(session.id); }}
+                  >
+                    Identificar hablantes
                   </MenuItem>
                   {paths?.dir && (
                     <MenuItem icon={<IconFolder width={14} height={14} />} onClick={() => { close(); void openPath(paths.dir); }}>

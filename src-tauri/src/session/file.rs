@@ -27,6 +27,9 @@ pub struct FileConfig {
     /// Copiar el audio decodificado a recordings/<id>/file.wav para reproducirlo.
     pub copy_audio: Option<bool>,
     pub whisper_threads: Option<u32>,
+    /// auto | gpu | cpu (solo whisper)
+    #[serde(default)]
+    pub whisper_accel: crate::stt::whisper::server::Accel,
 }
 
 #[derive(Serialize)]
@@ -124,7 +127,7 @@ async fn run(
     }
 
     let threads = cfg.whisper_threads.unwrap_or(4);
-    let engine = Engine::build(&app, &state, cfg.engine, cfg.model.clone(), threads).await?;
+    let engine = Engine::build(&app, &state, cfg.engine, cfg.model.clone(), threads, cfg.whisper_accel).await?;
     let spec = SttSpec {
         session_id: session_id.clone(),
         source: cfg.source.unwrap_or(Source::File),

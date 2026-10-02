@@ -5,7 +5,11 @@ import type {
   EngineId,
   MeetingApps,
   ProviderConfig,
+  WhisperAccel,
 } from "../types";
+
+/** Hilos lógicos del equipo: más hilos que esto ralentiza whisper. */
+const MAX_THREADS = navigator.hardwareConcurrency || 32;
 
 export type Theme = "dark" | "light" | "system";
 export type ExportFormat = "md" | "txt" | "json";
@@ -15,6 +19,13 @@ export interface SettingsValues {
   defaultEngine: EngineId;
   whisperModel: string;
   whisperThreads: number;
+  whisperAccel: WhisperAccel;
+  /** Texto provisional de "Otros" en vivo con whisper (más fluido, más GPU) */
+  whisperPartials: boolean;
+  /** Identificar hablantes ("Otros", archivos) al terminar una transcripción con whisper */
+  diarizeAuto: boolean;
+  /** Hablantes provisionales en "Otros" durante la sesión en vivo */
+  diarizeLive: boolean;
   defaultSources: AudioSource[];
   micDeviceId: string | null;
   systemDeviceId: string | null;
@@ -49,10 +60,15 @@ interface SettingsState extends SettingsValues {
 }
 
 const DEFAULTS: SettingsValues = {
-  llm: { provider: "gemini", model: "gemini-2.5-flash" },
+  // Local y sin API key; "auto" usa el mejor modelo instalado en Ollama.
+  llm: { provider: "ollama", model: "auto" },
   defaultEngine: "deepgram",
   whisperModel: "base",
-  whisperThreads: Math.max(2, Math.min(8, (navigator.hardwareConcurrency || 4) - 1)),
+  whisperThreads: Math.max(2, Math.min(8, MAX_THREADS)),
+  whisperAccel: "auto",
+  whisperPartials: true,
+  diarizeAuto: true,
+  diarizeLive: true,
   defaultSources: ["mic", "system"],
   micDeviceId: null,
   systemDeviceId: null,
@@ -87,6 +103,15 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: "notetaker-settings",
+      version: 1,
+      migrate: (persisted, version) => {
+        const p = (persisted ?? {}) as Partial<SettingsValues>;
+        // v1: Ollama pasa a "auto" (el mejor modelo instalado en cada momento).
+        if (version < 1 && p.llm?.provider === "ollama") {
+          p.llm = { ...p.llm, model: "auto" };
+        }
+        return p as SettingsState;
+      },
       partialize: (s) => {
         const { set: _s, setLlm: _l, ...rest } = s;
         void _s;
@@ -104,6 +129,7 @@ export const useSettingsStore = create<SettingsState>()(
           ...current,
           ...p,
           llm,
+          whisperThreads: Math.min(p.whisperThreads ?? current.whisperThreads, MAX_THREADS),
           meetingApps: { ...current.meetingApps, ...(p.meetingApps ?? {}) },
         };
       },

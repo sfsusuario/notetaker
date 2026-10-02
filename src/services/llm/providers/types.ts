@@ -54,6 +54,8 @@ export interface LlmProvider {
   test(model: string, baseUrl?: string): Promise<string>;
   /** lista los modelos disponibles del proveedor (requiere clave/servicio) */
   listModels(baseUrl?: string): Promise<string[]>;
+  /** precarga el modelo (solo proveedores locales) para un prompt de ~promptChars */
+  warmup?(model: string, baseUrl?: string, promptChars?: number): Promise<void>;
 }
 
 export const EFFORT: Record<Depth, "low" | "medium" | "high"> = {

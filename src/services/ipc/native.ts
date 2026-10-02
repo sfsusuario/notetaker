@@ -1,10 +1,11 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AudioMetrics,
   AutoStopPending,
   AutoStopSettingsIpc,
   DeviceInfo,
+  DiarizeStatus,
   DownloadProgress,
   EngineInfo,
   FileConfig,
@@ -16,7 +17,9 @@ import type {
   Segment,
   StartResult,
   StatusEvent,
+  SpeakerTurn,
   StopResult,
+  SystemProfile,
   WhisperServerEvent,
   WhisperStatus,
 } from "../../types";
@@ -56,6 +59,42 @@ export const whisperInstall = (args: { model?: string | null; includeServer?: bo
     includeServer: args.includeServer ?? false,
   });
 export const whisperStatus = () => invoke<WhisperStatus>("whisper_status");
+export const systemProfile = () => invoke<SystemProfile>("system_profile");
+export const diarizeStatus = () => invoke<DiarizeStatus>("diarize_status");
+export const diarizeInstall = () => invoke<DiarizeStatus>("diarize_install");
+export const diarizeAudio = (path: string) => invoke<SpeakerTurn[]>("diarize_audio", { path });
+
+// Ollama va por Rust: el origen del WebView compilado (http://tauri.localhost)
+// recibe 403 de Ollama si se llama con fetch.
+export const ollamaGet = <T>(baseUrl: string | undefined, path: "/api/tags" | "/api/ps" | "/api/version") =>
+  invoke<T>("ollama_get", { baseUrl: baseUrl ?? null, path });
+export const ollamaPost = <T>(baseUrl: string | undefined, path: "/api/show" | "/api/generate", body: unknown) =>
+  invoke<T>("ollama_post", { baseUrl: baseUrl ?? null, path, body });
+
+/** POST /api/chat en streaming; resuelve cuando llega el último fragmento. */
+export async function ollamaChat(
+  baseUrl: string | undefined,
+  body: unknown,
+  onChunk: (chunk: Record<string, unknown>) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const requestId = crypto.randomUUID();
+  let ended!: () => void;
+  const done = new Promise<void>((resolve) => (ended = resolve));
+  const channel = new Channel<Record<string, unknown>>();
+  channel.onmessage = (m) => {
+    if (m.__end) ended();
+    else onChunk(m);
+  };
+  const abort = () => void invoke("ollama_cancel", { requestId });
+  signal?.addEventListener("abort", abort, { once: true });
+  try {
+    await invoke("ollama_chat", { baseUrl: baseUrl ?? null, requestId, body, onEvent: channel });
+    await done;
+  } finally {
+    signal?.removeEventListener("abort", abort);
+  }
+}
 export const whisperDeleteModel = (model: string) =>
   invoke<WhisperStatus>("whisper_delete_model", { model });
 export const whisperStopServer = () => invoke<void>("whisper_stop_server");

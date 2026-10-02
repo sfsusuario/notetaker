@@ -26,6 +26,7 @@ interface SessionState {
   autoStop: AutoStopPending | null;
   start: (sessionId: string, config: LiveConfig, startedAt: number) => void;
   addFinal: (seg: Segment) => void;
+  removeSegments: (ids: string[]) => void;
   setPartial: (seg: Segment) => void;
   setStatus: (ev: StatusEvent) => void;
   setMetrics: (m: AudioMetrics) => void;
@@ -73,6 +74,8 @@ export const useSessionStore = create<SessionState>((set) => ({
       if (p && !p.id.endsWith("-pending")) partials[seg.source] = null;
       return { segments: upsertSorted(s.segments, seg), partials };
     }),
+  removeSegments: (ids) =>
+    set((s) => ({ segments: s.segments.filter((x) => !ids.includes(x.id)) })),
   setPartial: (seg) =>
     set((s) => ({
       partials: { ...s.partials, [seg.source]: seg.text ? seg : null },

@@ -52,6 +52,19 @@ export async function testProvider(): Promise<string> {
   return getProvider(llm.provider).test(llm.model, llm.baseUrl);
 }
 
+/**
+ * Precarga el modelo local al abrir el chat: cargar un modelo de varios GB
+ * tarda 10–20 s y, sin esto, se suman a la primera respuesta.
+ */
+export function warmupLlm(segments: Segment[] = [], speakers: SpeakerOverride[] = []): void {
+  const { llm } = useSettingsStore.getState();
+  const provider = getProvider(llm.provider);
+  if (!provider.warmup) return;
+  // Mismo tamaño de prompt que usará askAboutSession (system + transcripción)
+  const chars = clampTranscript(formatTranscript(segments, speakers)).text.length + 1500;
+  void provider.warmup(llm.model, llm.baseUrl, chars).catch(() => {});
+}
+
 /** Pregunta sobre una sesión; persiste pregunta y respuesta en la DB. */
 export async function askAboutSession(args: {
   sessionId: string;

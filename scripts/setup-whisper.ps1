@@ -14,8 +14,11 @@
     sirve para preinstalar sin abrir la app o para automatizar despliegues.
 
 .PARAMETER Model
-    Modelo a descargar: tiny (75 MB), base (142 MB, recomendado en vivo),
-    small (466 MB), medium (1.5 GB) o large-v3-turbo (1.6 GB).
+    Modelo a descargar: tiny (75 MB), base (142 MB), small-q5_1 (182 MB,
+    recomendado sin GPU), small (466 MB), medium-q5_0 (515 MB), medium (1.5 GB),
+    large-v3-turbo-q5_0 (548 MB), large-v3-turbo-q8_0 (834 MB, recomendado con
+    GPU, ver build-whisper-vulkan.ps1) o large-v3-turbo (1.6 GB).
+    Las variantes q5/q8 dan el mismo texto con menos memoria y mas velocidad.
 
 .PARAMETER Tag
     Tag de release de whisper.cpp (por defecto el que usa la app).
@@ -32,7 +35,8 @@
     .\scripts\setup-whisper.ps1 -Model tiny -SkipServer
 #>
 param(
-    [ValidateSet("tiny", "base", "small", "medium", "large-v3-turbo")]
+    [ValidateSet("tiny", "base", "small-q5_1", "small", "medium-q5_0", "medium",
+        "large-v3-turbo-q5_0", "large-v3-turbo-q8_0", "large-v3-turbo")]
     [string]$Model = "base",
     [string]$Tag = "b4938",
     [switch]$SkipServer,

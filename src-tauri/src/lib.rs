@@ -1,12 +1,16 @@
 mod audio;
 mod autostop;
+mod diarize;
 mod files;
 mod meeting;
+mod ollama;
 mod paths;
 mod secrets;
 mod session;
+mod speaker;
 mod state;
 mod stt;
+mod sysprofile;
 mod tray;
 
 use std::sync::Arc;
@@ -70,6 +74,10 @@ fn migrations() -> Vec<Migration> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("failed to install Rustls ring crypto provider");
+
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -84,6 +92,26 @@ pub fn run() {
             // Servidores whisper que sobrevivieran a un cierre abrupto anterior.
             stt::whisper::server::kill_stale(app.handle());
             let state = app.state::<Arc<state::AppState>>().inner().clone();
+            // Instalaciones anteriores al VAD: el modelo (0.9 MB) se baja en
+            // segundo plano y se usa en cuanto se arranque el servidor.
+            if stt::whisper::install::server_exe(app.handle()).map(|p| p.exists()).unwrap_or(false) {
+                let (handle, http) = (app.handle().clone(), state.http.clone());
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = stt::whisper::install::ensure_vad_model(&handle, &http).await {
+                        eprintln!("[whisper] modelo VAD no disponible: {e}");
+                    }
+                });
+            }
+            // Identificación de hablantes instalada antes de las etiquetas en
+            // vivo: completa la librería en C (~7 MB) en segundo plano.
+            {
+                let (handle, state) = (app.handle().clone(), state.clone());
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = diarize::complete_install(&handle, &state).await {
+                        eprintln!("[diarize] no se pudo completar la instalación: {e}");
+                    }
+                });
+            }
             meeting::spawn_poller(app.handle().clone(), state);
             Ok(())
         })
@@ -111,6 +139,14 @@ pub fn run() {
             stt::whisper::install::whisper_status,
             stt::whisper::install::whisper_delete_model,
             stt::whisper::install::whisper_stop_server,
+            sysprofile::system_profile,
+            ollama::ollama_get,
+            ollama::ollama_post,
+            ollama::ollama_chat,
+            ollama::ollama_cancel,
+            diarize::diarize_status,
+            diarize::diarize_install,
+            diarize::diarize_audio,
             autostop::autostop_set,
             autostop::autostop_pending,
             autostop::autostop_cancel,
